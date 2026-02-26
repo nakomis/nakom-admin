@@ -147,10 +147,10 @@ export class ApiStack extends cdk.Stack {
             securityGroups: [analyticsStack.lambdaSecurityGroup],
             environment: {
                 STAGING_BUCKET: analyticsStack.stagingBucket.bucketName,
-                DB_ENDPOINT: analyticsStack.dbInstance.dbInstanceEndpointAddress,
+                DB_HOST: analyticsStack.dbInstance.dbInstanceEndpointAddress,
                 DB_NAME: 'analytics',
-                DB_USERNAME: 'analytics',
-                DB_PASSWORD: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),
+                DB_USER: 'analytics',
+                DB_PASS: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),
             },
         });
 
@@ -170,10 +170,10 @@ export class ApiStack extends cdk.Stack {
             vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
             securityGroups: [analyticsStack.lambdaSecurityGroup],
             environment: {
-                DB_ENDPOINT: analyticsStack.dbInstance.dbInstanceEndpointAddress,
+                DB_HOST: analyticsStack.dbInstance.dbInstanceEndpointAddress,
                 DB_NAME: 'analytics',
-                DB_USERNAME: 'analytics',
-                DB_PASSWORD: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),
+                DB_USER: 'analytics',
+                DB_PASS: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),
             },
         });
 
@@ -187,15 +187,11 @@ export class ApiStack extends cdk.Stack {
             timeout: cdk.Duration.seconds(120),
             bundling,
             environment: {
-                CF_LOGS_BUCKET_PARAM: '/nakom.is/cf-access-logs-bucket',
+                CF_LOGS_BUCKET: 'nakomis-cf-access-logs',
                 CHAT_LOGS_TABLE: 'nakomis-chat-logs',
             },
         });
 
-        monitorLogs.addToRolePolicy(new iam.PolicyStatement({
-            actions: ['ssm:GetParameter'],
-            resources: [`arn:aws:ssm:${region}:${account}:parameter/nakom.is/cf-access-logs-bucket`],
-        }));
         monitorLogs.addToRolePolicy(new iam.PolicyStatement({
             actions: ['s3:GetObject', 's3:ListBucket'],
             resources: [
