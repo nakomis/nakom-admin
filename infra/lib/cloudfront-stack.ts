@@ -60,5 +60,7 @@ export class CloudfrontStack extends cdk.Stack {
                 new targets.CloudFrontTarget(this.distribution),
             ),
         });
+
+        new cdk.CfnOutput(this, 'DistributionId', { value: this.distribution.distributionId });
     }
 }

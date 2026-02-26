@@ -66,5 +66,9 @@ export class CognitoStack extends cdk.Stack {
             identityPoolId: this.identityPool.ref,
             roles: { authenticated: this.authenticatedRole.roleArn },
         });
+
+        new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId });
+        new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId });
+        new cdk.CfnOutput(this, 'IdentityPoolId', { value: this.identityPool.ref });
     }
 }

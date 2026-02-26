@@ -260,10 +260,11 @@ export class ApiStack extends cdk.Stack {
         addRoute(apigwv2.HttpMethod.POST, '/blocklist', blocklist);
         addRoute(apigwv2.HttpMethod.DELETE, '/blocklist/{ip}', blocklist);
 
-        // Output the API endpoint
+        // Output the API endpoint via both SSM and CloudFormation output
         new ssm.StringParameter(this, 'ApiEndpointParam', {
             parameterName: '/nakom-admin/api-endpoint',
             stringValue: this.api.apiEndpoint,
         });
+        new cdk.CfnOutput(this, 'ApiEndpoint', { value: this.api.apiEndpoint });
     }
 }
