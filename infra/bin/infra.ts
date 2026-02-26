@@ -22,16 +22,17 @@ const cognitoStack = new CognitoStack(app, 'AdminCognitoStack', londonEnv);
 
 const analyticsStack = new AnalyticsStack(app, 'AdminAnalyticsStack', londonEnv);
 
+const apiStack = new ApiStack(app, 'AdminApiStack', {
+    ...londonEnv,
+    cognitoStack,
+    analyticsStack,
+});
+
 const cloudfrontStack = new CloudfrontStack(app, 'AdminCloudfrontStack', {
     ...londonEnv,
     crossRegionReferences: true,
     certificate: certStack.certificate,
-});
-
-new ApiStack(app, 'AdminApiStack', {
-    ...londonEnv,
-    cognitoStack,
-    analyticsStack,
+    apiOriginDomain: apiStack.api.apiEndpoint,
 });
 
 cdk.Tags.of(app).add('MH-Project', 'nakom-admin');

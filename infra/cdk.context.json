@@ -1,0 +1,19 @@
+{
+  "acknowledged-issue-numbers": [
+    37013,
+    34892
+  ],
+  "hosted-zone:account=637423226886:domainName=nakom.is:region=us-east-1": {
+    "Id": "/hostedzone/Z02623972ZO7Q6DNJ63GX",
+    "Name": "nakom.is."
+  },
+  "availability-zones:account=637423226886:region=eu-west-2": [
+    "eu-west-2a",
+    "eu-west-2b",
+    "eu-west-2c"
+  ],
+  "hosted-zone:account=637423226886:domainName=nakom.is:region=eu-west-2": {
+    "Id": "/hostedzone/Z02623972ZO7Q6DNJ63GX",
+    "Name": "nakom.is."
+  }
+}

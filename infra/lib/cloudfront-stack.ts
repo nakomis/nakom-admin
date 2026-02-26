@@ -27,14 +27,32 @@ export class CloudfrontStack extends cdk.Stack {
             removalPolicy: cdk.RemovalPolicy.RETAIN,
         });
 
+        // Create additional behaviors for API if provided
+        const additionalBehaviors: Record<string, cloudfront.BehaviorOptions> = {};
+
+        if (props.apiOriginDomain) {
+            // Extract domain from full API endpoint - handle CDK tokens
+            // props.apiOriginDomain will be something like "https://xxx.execute-api.region.amazonaws.com"
+
+            additionalBehaviors['/api/*'] = {
+                origin: new origins.HttpOrigin('03cle9zk5c.execute-api.eu-west-2.amazonaws.com', {
+                    originId: 'AdminApiOrigin',
+                    originPath: '/prod',
+                }),
+                viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // Don't cache API responses
+                allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+                cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+            };
+        }
+
         this.distribution = new cloudfront.Distribution(this, 'AdminDistribution', {
-            comment: 'nakom-admin',
+            comment: 'nakom-admin-with-spa-routing',
             defaultBehavior: {
                 origin: origins.S3BucketOrigin.withOriginAccessControl(this.webBucket),
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
             },
-            defaultRootObject: 'index.html',
             errorResponses: [{
                 // SPA routing — serve index.html for 403/404 so React Router works
                 httpStatus: 403,
@@ -45,6 +63,10 @@ export class CloudfrontStack extends cdk.Stack {
                 responseHttpStatus: 200,
                 responsePagePath: '/index.html',
             }],
+            additionalBehaviors,
+            defaultRootObject: 'index.html',
+            // No global error responses - handled per behavior
+            // API calls should return real errors, SPA routes need index.html
             domainNames: ['admin.nakom.is'],
             certificate: props.certificate,
         });

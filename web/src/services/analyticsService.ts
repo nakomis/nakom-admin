@@ -1,7 +1,27 @@
 import Config from '../config/config';
 
 async function apiCall<T>(path: string, method = 'GET', body?: object): Promise<T> {
-    const idToken = (window as any).__oidc_user?.id_token;
+    // Get token from react-oidc-context's storage
+    let idToken: string | undefined;
+
+    // Check localStorage for oidc.user key with our configuration
+    const storageKey = `oidc.user:${Config.cognito.authority}:${Config.cognito.userPoolClientId}`;
+    try {
+        const stored = localStorage.getItem(storageKey);
+        if (stored) {
+            const userData = JSON.parse(stored);
+            idToken = userData.access_token;
+            console.log('Token found in localStorage:', !!idToken);
+        } else {
+            console.warn('No user data in localStorage for key:', storageKey);
+        }
+    } catch (e) {
+        console.warn('Failed to get token from localStorage:', e);
+    }
+
+    if (!idToken) {
+        console.error('No access token found - user may not be authenticated');
+    }
     const res = await fetch(`${Config.apiEndpoint}${path}`, {
         method,
         headers: {

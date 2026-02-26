@@ -38,6 +38,14 @@ export class ApiStack extends cdk.Stack {
                 allowHeaders: ['Content-Type', 'Authorization'],
                 maxAge: cdk.Duration.days(1),
             },
+            createDefaultStage: false, // We'll create our own stage
+        });
+
+        // Create explicit prod stage
+        const prodStage = new apigwv2.HttpStage(this, 'ProdStage', {
+            httpApi: this.api,
+            stageName: 'prod',
+            autoDeploy: true,
         });
 
         const authorizer = new authorizers.HttpJwtAuthorizer(
