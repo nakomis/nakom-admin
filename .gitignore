@@ -1,0 +1,13 @@
+node_modules
+*.js
+!jest.config.js
+*.d.ts
+.cdk.staging
+cdk.out
+dist
+.DS_Store
+*.swp
+*.tsbuildinfo
+web/dist
+infra/cdk.out
+config.json

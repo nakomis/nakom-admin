@@ -1,0 +1,19 @@
+#!/bin/sh
+# Export modified .drawio files to SVG before commit.
+# Requires draw.io desktop app: https://github.com/jgraph/drawio-desktop
+
+DRAWIO_BIN="/Applications/draw.io.app/Contents/MacOS/draw.io"
+if [ ! -x "$DRAWIO_BIN" ]; then
+  echo "draw.io not found at $DRAWIO_BIN — skipping SVG export"
+  exit 0
+fi
+
+CHANGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.drawio$')
+if [ -z "$CHANGED" ]; then exit 0; fi
+
+for f in $CHANGED; do
+  out="docs/diagrams/$(basename "$f" .drawio).svg"
+  echo "Exporting $f → $out"
+  "$DRAWIO_BIN" --export --format svg --output "$out" "$f"
+  git add "$out"
+done
