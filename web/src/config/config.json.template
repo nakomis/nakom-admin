@@ -1,0 +1,13 @@
+{
+  "aws": { "region": "eu-west-2" },
+  "cognito": {
+    "authority": "https://cognito-idp.eu-west-2.amazonaws.com/__USER_POOL_ID__",
+    "userPoolId": "__USER_POOL_ID__",
+    "userPoolClientId": "__CLIENT_ID__",
+    "cognitoDomain": "auth-nakom-admin.auth.eu-west-2.amazoncognito.com",
+    "redirectUri": "https://admin.nakom.is/loggedin",
+    "logoutUri": "https://admin.nakom.is/logout",
+    "identityPoolId": "__IDENTITY_POOL_ID__"
+  },
+  "apiEndpoint": "https://__API_ID__.execute-api.eu-west-2.amazonaws.com"
+}
