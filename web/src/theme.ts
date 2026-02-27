@@ -7,10 +7,8 @@ export const theme = createTheme({
         fontSize: 14,
     },
     palette: {
-        mode: 'dark',
-        text: { secondary: '#585c64' },
+        mode: 'light',
         primary: { main: blue['A700'] },
         secondary: { main: green[900] },
-        background: { default: '#121212', paper: '#1e1e1e' },
     },
 });

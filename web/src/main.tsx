@@ -11,6 +11,7 @@ const cognitoAuthConfig = {
     authority: Config.cognito.authority,
     client_id: Config.cognito.userPoolClientId,
     redirect_uri: Config.cognito.redirectUri,
+    post_logout_redirect_uri: Config.cognito.logoutUri,
     response_type: 'code',
     scope: 'email openid profile',
 };

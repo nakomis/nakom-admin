@@ -26,6 +26,22 @@ async function getDb(): Promise<PgClient> {
 
     // Bootstrap schema on first connection
     await pgClient.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+
+    // Migration: drop table if it was created with the wrong embedding dimension
+    await pgClient.query(`
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_attribute a
+                JOIN pg_class c ON c.oid = a.attrelid
+                WHERE c.relname = 'chat_logs' AND a.attname = 'embedding'
+                  AND a.atttypmod <> 1024
+            ) THEN
+                DROP TABLE chat_logs;
+            END IF;
+        END $$;
+    `);
+
     await pgClient.query(`
         CREATE TABLE IF NOT EXISTS chat_logs (
             id              TEXT PRIMARY KEY,
@@ -42,13 +58,12 @@ async function getDb(): Promise<PgClient> {
             output_tokens   INT,
             duration_ms     INT,
             rate_limited    BOOLEAN,
-            embedding       vector(1536)
+            embedding       vector(1024)
         )
     `);
     await pgClient.query(`
         CREATE INDEX IF NOT EXISTS chat_logs_embedding_idx
-        ON chat_logs USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
+        ON chat_logs USING hnsw (embedding vector_cosine_ops)
     `);
 
     return pgClient;

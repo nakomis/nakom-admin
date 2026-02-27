@@ -1,53 +1,48 @@
+import { Credentials } from '@aws-sdk/client-cognito-identity';
 import Config from '../config/config';
+import { createSignedFetcher, SignedFetcherOptions } from 'aws-sigv4-fetch';
 
-async function apiCall<T>(path: string, method = 'GET', body?: object): Promise<T> {
-    // Get token from react-oidc-context's storage
-    let idToken: string | undefined;
+async function apiCall<T>(creds: Credentials, path: string, method = 'GET', body?: object): Promise<T> {
+    const options: SignedFetcherOptions = {
+        service: 'execute-api',
+        region: 'eu-west-2',
+        credentials: {
+            accessKeyId: creds.AccessKeyId!,
+            secretAccessKey: creds.SecretKey!,
+            sessionToken: creds.SessionToken!,
+        },
+        fetch: fetch,              // optional (defaults to native fetch)
+    };
 
-    // Check localStorage for oidc.user key with our configuration
-    const storageKey = `oidc.user:${Config.cognito.authority}:${Config.cognito.userPoolClientId}`;
-    try {
-        const stored = localStorage.getItem(storageKey);
-        if (stored) {
-            const userData = JSON.parse(stored);
-            idToken = userData.access_token;
-            console.log('Token found in localStorage:', !!idToken);
-        } else {
-            console.warn('No user data in localStorage for key:', storageKey);
-        }
-    } catch (e) {
-        console.warn('Failed to get token from localStorage:', e);
-    }
+    const signedFetch = createSignedFetcher(options);
 
-    if (!idToken) {
-        console.error('No access token found - user may not be authenticated');
-    }
-    const res = await fetch(`${Config.apiEndpoint}${path}`, {
+    const res = await signedFetch(`${Config.apiEndpoint}${path}`, {
         method,
         headers: {
             'Content-Type': 'application/json',
-            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
+    }).catch(e => {
+        console.error(`API call error: ${method} ${path}`, e);
+        throw e;
     });
     if (!res.ok) throw new Error(`API ${method} ${path} → ${res.status}`);
     return res.json();
 }
 
-export const AnalyticsService = {
-    getRdsStatus: () => apiCall<{ status: string; endpoint?: string }>('/rds/status'),
-    startRds: () => apiCall('/rds/start', 'POST'),
-    stopRds: () => apiCall('/rds/stop', 'POST'),
-    takeSnapshot: () => apiCall('/rds/snapshot', 'POST'),
-    listSnapshots: () => apiCall<any[]>('/rds/snapshots'),
-    restoreSnapshot: () => apiCall('/rds/restore', 'POST'),
-    importGenerate: () => apiCall<{ queued: number }>('/import/generate', 'POST'),
-    query: (queryType: string, params?: object) =>
-        apiCall<any[]>(`/query/${queryType}`, 'POST', params),
-    mineLogs: (days: number) => apiCall<any>('/logs/mine', 'POST', { days }),
-    getBlocklist: () => apiCall<any[]>('/blocklist'),
-    addToBlocklist: (ip: string, reason: string) =>
-        apiCall('/blocklist', 'POST', { action: 'add', ip, reason }),
-    removeFromBlocklist: (ip: string) =>
-        apiCall(`/blocklist/${encodeURIComponent(ip)}`, 'DELETE'),
-};
+export class AnalyticsService {
+    constructor(private creds: Credentials) {}
+
+    getRdsStatus() { return apiCall<{ status: string; endpoint?: string }>(this.creds, '/rds/status'); }
+    startRds() { return apiCall(this.creds, '/rds/start', 'POST'); }
+    stopRds() { return apiCall(this.creds, '/rds/stop', 'POST'); }
+    takeSnapshot() { return apiCall(this.creds, '/rds/snapshot', 'POST'); }
+    listSnapshots() { return apiCall<any[]>(this.creds, '/rds/snapshots'); }
+    restoreSnapshot() { return apiCall(this.creds, '/rds/restore', 'POST'); }
+    importGenerate() { return apiCall<{ queued: number }>(this.creds, '/import/generate', 'POST'); }
+    query(queryType: string, params?: object) { return apiCall<any[]>(this.creds, `/query/${queryType}`, 'POST', params); }
+    mineLogs(days: number) { return apiCall<any>(this.creds, '/logs/mine', 'POST', { days }); }
+    getBlocklist() { return apiCall<any[]>(this.creds, '/blocklist'); }
+    addToBlocklist(ip: string, reason: string) { return apiCall(this.creds, '/blocklist', 'POST', { action: 'add', ip, reason }); }
+    removeFromBlocklist(ip: string) { return apiCall(this.creds, `/blocklist/${encodeURIComponent(ip)}`, 'DELETE'); }
+}

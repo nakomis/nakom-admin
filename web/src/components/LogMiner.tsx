@@ -16,7 +16,7 @@ const FLAG_COLORS: Record<string, 'error' | 'warning' | 'default'> = {
     HIGH_VOLUME: 'warning',
 };
 
-export default function LogMiner({ onBlock }: { onBlock: (ip: string, reason: string) => void }) {
+export default function LogMiner({ service, onBlock }: { service: AnalyticsService; onBlock: (ip: string, reason: string) => void }) {
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<any | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -25,7 +25,7 @@ export default function LogMiner({ onBlock }: { onBlock: (ip: string, reason: st
         setLoading(true);
         setError(null);
         try {
-            const r = await AnalyticsService.mineLogs(days);
+            const r = await service.mineLogs(days);
             setResult(r);
         } catch (e: any) {
             setError(e.message);

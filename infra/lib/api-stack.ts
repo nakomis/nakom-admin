@@ -7,6 +7,9 @@ import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import { Construct } from 'constructs';
 import { CognitoStack } from './cognito-stack';
 import { AnalyticsStack } from './analytics-stack';
@@ -35,30 +38,18 @@ export class ApiStack extends cdk.Stack {
                     apigwv2.CorsHttpMethod.DELETE,
                     apigwv2.CorsHttpMethod.OPTIONS,
                 ],
-                allowHeaders: ['Content-Type', 'Authorization'],
+                allowHeaders: ['Content-Type', 'Authorization', 'X-Amz-Date', 'X-Amz-Security-Token', 'X-Amz-Content-Sha256'],
                 maxAge: cdk.Duration.days(1),
             },
-            createDefaultStage: false, // We'll create our own stage
         });
 
-        // Create explicit prod stage
-        const prodStage = new apigwv2.HttpStage(this, 'ProdStage', {
-            httpApi: this.api,
-            stageName: 'prod',
-            autoDeploy: true,
-        });
 
-        const authorizer = new authorizers.HttpJwtAuthorizer(
-            'CognitoAuthorizer',
-            `https://cognito-idp.${this.region}.amazonaws.com/${cognitoStack.userPool.userPoolId}`,
-            {
-                jwtAudience: [cognitoStack.userPoolClient.userPoolClientId],
-            },
-        );
+        const authorizer = new authorizers.HttpIamAuthorizer();
 
-        const defaultAuthOptions: apigwv2.AddRoutesOptions = {
-            authorizer,
-        } as unknown as apigwv2.AddRoutesOptions;
+        cognitoStack.authenticatedRole.addToPolicy(new iam.PolicyStatement({
+            actions: ['execute-api:Invoke'],
+            resources: [this.api.arnForExecuteApi('*', '/*', '*')],
+        }));
 
         const bundling = { minify: true, sourceMap: true };
         const runtime = lambda.Runtime.NODEJS_20_X;
@@ -232,7 +223,7 @@ export class ApiStack extends cdk.Stack {
         }));
         blocklist.addToRolePolicy(new iam.PolicyStatement({
             actions: [
-                'cloudfront:DescribeFunctions',
+                'cloudfront:DescribeFunction',
                 'cloudfront:UpdateFunction',
                 'cloudfront:PublishFunction',
                 'cloudfront:GetFunction',
@@ -260,7 +251,7 @@ export class ApiStack extends cdk.Stack {
         addRoute(apigwv2.HttpMethod.POST, '/import/generate', importGenerate);
         addRoute(apigwv2.HttpMethod.POST, '/import/execute', importExecute);
 
-        addRoute(apigwv2.HttpMethod.GET, '/query/{type}', queryFn);
+        addRoute(apigwv2.HttpMethod.POST, '/query/{type}', queryFn);
 
         addRoute(apigwv2.HttpMethod.POST, '/logs/mine', monitorLogs);
 
@@ -268,11 +259,54 @@ export class ApiStack extends cdk.Stack {
         addRoute(apigwv2.HttpMethod.POST, '/blocklist', blocklist);
         addRoute(apigwv2.HttpMethod.DELETE, '/blocklist/{ip}', blocklist);
 
+        // --- Custom Domain: api.admin.nakom.is ---
+        const zone = route53.HostedZone.fromLookup(this, 'NakomIsZone', {
+            domainName: 'nakom.is',
+        });
+
+        const apiCert = new acm.Certificate(this, 'ApiCert', {
+            domainName: 'api.admin.nakom.is',
+            validation: acm.CertificateValidation.fromDns(zone),
+        });
+
+        const customDomain = new apigwv2.DomainName(this, 'ApiCustomDomain', {
+            domainName: 'api.admin.nakom.is',
+            certificate: apiCert,
+        });
+
+        new apigwv2.ApiMapping(this, 'ApiMapping', {
+            api: this.api,
+            domainName: customDomain,
+            stage: this.api.defaultStage!,
+        });
+
+        new route53.ARecord(this, 'ApiARecord', {
+            zone,
+            recordName: 'api.admin',
+            target: route53.RecordTarget.fromAlias(
+                new targets.ApiGatewayv2DomainProperties(
+                    customDomain.regionalDomainName,
+                    customDomain.regionalHostedZoneId,
+                ),
+            ),
+        });
+        new route53.AaaaRecord(this, 'ApiAaaaRecord', {
+            zone,
+            recordName: 'api.admin',
+            target: route53.RecordTarget.fromAlias(
+                new targets.ApiGatewayv2DomainProperties(
+                    customDomain.regionalDomainName,
+                    customDomain.regionalHostedZoneId,
+                ),
+            ),
+        });
+
         // Output the API endpoint via both SSM and CloudFormation output
         new ssm.StringParameter(this, 'ApiEndpointParam', {
             parameterName: '/nakom-admin/api-endpoint',
             stringValue: this.api.apiEndpoint,
         });
         new cdk.CfnOutput(this, 'ApiEndpoint', { value: this.api.apiEndpoint });
+        new cdk.CfnOutput(this, 'ApiCustomDomainUrl', { value: `https://${customDomain.name}` });
     }
 }

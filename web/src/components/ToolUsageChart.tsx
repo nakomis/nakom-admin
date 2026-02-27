@@ -11,7 +11,7 @@ export default function ToolUsageChart({ rows }: { rows: ToolRow[] }) {
             {rows.map(r => (
                 <Box key={r.tool} sx={{ display: 'flex', alignItems: 'center', mb: 0.5, gap: 1 }}>
                     <Typography sx={{ minWidth: 200, fontFamily: 'monospace', fontSize: 13 }}>{r.tool}</Typography>
-                    <Box sx={{ flexGrow: 1, bgcolor: '#2a2a2a', height: 18, borderRadius: 1, overflow: 'hidden' }}>
+                    <Box sx={{ flexGrow: 1, bgcolor: 'grey.200', height: 18, borderRadius: 1, overflow: 'hidden' }}>
                         <Box sx={{
                             width: `${(Number(r.uses) / max) * 100}%`,
                             height: '100%',

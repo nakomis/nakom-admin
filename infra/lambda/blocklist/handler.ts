@@ -76,34 +76,69 @@ async function redeployCfFunction(blockedIps: string[]): Promise<void> {
     }));
 }
 
-export const handler = async (event: {
-    action: 'list' | 'add' | 'remove';
-    ip?: string;
-    reason?: string;
-}) => {
-    const entries = await readBlocklist();
+export const handler = async (event: any) => {
+    const isHttp = !!(event.rawPath && event.requestContext);
 
-    if (event.action === 'list') {
-        // Return in reverse-chronological order (newest first)
-        return entries.slice().sort((a, b) =>
-            new Date(b.blockedAt).getTime() - new Date(a.blockedAt).getTime()
-        );
+    const ok = (data: any) => isHttp
+        ? { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }
+        : data;
+
+    const err = (status: number, message: string) => isHttp
+        ? { statusCode: status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: message }) }
+        : { error: message };
+
+    let action: 'list' | 'add' | 'remove';
+    let ip: string | undefined;
+    let reason: string | undefined;
+
+    if (isHttp) {
+        const method = event.requestContext?.http?.method;
+        if (method === 'GET') {
+            action = 'list';
+        } else if (method === 'POST') {
+            const body = event.body ? JSON.parse(event.body) : {};
+            action = 'add';
+            ip = body.ip;
+            reason = body.reason;
+        } else if (method === 'DELETE') {
+            action = 'remove';
+            ip = event.pathParameters?.ip ? decodeURIComponent(event.pathParameters.ip) : undefined;
+        } else {
+            return err(405, 'Method not allowed');
+        }
+    } else {
+        action = event.action;
+        ip = event.ip;
+        reason = event.reason;
     }
 
-    if (event.action === 'add' && event.ip) {
-        if (entries.some(e => e.ip === event.ip)) return { ok: true, alreadyBlocked: true };
-        entries.push({ ip: event.ip, blockedAt: new Date().toISOString(), reason: event.reason ?? '' });
-        await writeBlocklist(entries);
-        await redeployCfFunction(entries.map(e => e.ip));
-        return { ok: true, blocked: event.ip };
-    }
+    try {
+        const entries = await readBlocklist();
 
-    if (event.action === 'remove' && event.ip) {
-        const filtered = entries.filter(e => e.ip !== event.ip);
-        await writeBlocklist(filtered);
-        await redeployCfFunction(filtered.map(e => e.ip));
-        return { ok: true, unblocked: event.ip };
-    }
+        if (action === 'list') {
+            return ok(entries.slice().sort((a, b) =>
+                new Date(b.blockedAt).getTime() - new Date(a.blockedAt).getTime()
+            ));
+        }
 
-    return { error: 'Invalid action' };
+        if (action === 'add' && ip) {
+            if (entries.some(e => e.ip === ip)) return ok({ ok: true, alreadyBlocked: true });
+            entries.push({ ip, blockedAt: new Date().toISOString(), reason: reason ?? '' });
+            await writeBlocklist(entries);
+            await redeployCfFunction(entries.map(e => e.ip));
+            return ok({ ok: true, blocked: ip });
+        }
+
+        if (action === 'remove' && ip) {
+            const filtered = entries.filter(e => e.ip !== ip);
+            await writeBlocklist(filtered);
+            await redeployCfFunction(filtered.map(e => e.ip));
+            return ok({ ok: true, unblocked: ip });
+        }
+
+        return err(400, 'Invalid action');
+    } catch (error) {
+        console.error('Blocklist error:', error);
+        return err(500, error instanceof Error ? error.message : 'Unknown error');
+    }
 };

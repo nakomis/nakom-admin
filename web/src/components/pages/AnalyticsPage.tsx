@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
@@ -14,6 +14,7 @@ import ToolUsageChart from '../ToolUsageChart';
 import IpActivityTable from '../IpActivityTable';
 import LogMiner from '../LogMiner';
 import BlocklistPanel from '../BlocklistPanel';
+import { Credentials } from '@aws-sdk/client-cognito-identity';
 
 function StatusChip({ status }: { status: string }) {
     const color = status === 'available' ? 'success'
@@ -31,7 +32,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     );
 }
 
-export default function AnalyticsPage() {
+export default function AnalyticsPage({ creds }: { creds: Credentials }) {
+    const service = useMemo(() => new AnalyticsService(creds), [creds]);
     const [rdsStatus, setRdsStatus] = useState<string>('unknown');
     const [rdsEndpoint, setRdsEndpoint] = useState<string | undefined>();
     const [statusLoading, setStatusLoading] = useState(false);
@@ -44,10 +46,12 @@ export default function AnalyticsPage() {
     const [edges, setEdges] = useState<any[]>([]);
     const [threshold, setThreshold] = useState(0.85);
     const [graphLoading, setGraphLoading] = useState(false);
+    const [graphError, setGraphError] = useState<string | null>(null);
 
     // Tool usage & IP activity
     const [toolRows, setToolRows] = useState<any[]>([]);
     const [ipRows, setIpRows] = useState<any[]>([]);
+    const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
     // Blocklist
     const [blocklist, setBlocklist] = useState<any[]>([]);
@@ -55,7 +59,7 @@ export default function AnalyticsPage() {
     const fetchStatus = useCallback(async () => {
         setStatusLoading(true);
         try {
-            const r = await AnalyticsService.getRdsStatus();
+            const r = await service.getRdsStatus();
             setRdsStatus(r.status);
             setRdsEndpoint(r.endpoint);
         } catch {
@@ -63,7 +67,7 @@ export default function AnalyticsPage() {
         } finally {
             setStatusLoading(false);
         }
-    }, []);
+    }, [service]);
 
     useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
@@ -97,7 +101,7 @@ export default function AnalyticsPage() {
     const importNow = async () => {
         setActionLoading(true);
         try {
-            const r = await AnalyticsService.importGenerate();
+            const r = await service.importGenerate();
             setImportResult(`Queued ${r.queued} records`);
         } catch (e: any) {
             setImportResult(`Error: ${e.message}`);
@@ -108,38 +112,44 @@ export default function AnalyticsPage() {
 
     const loadGraph = useCallback(async (t: number) => {
         setGraphLoading(true);
+        setGraphError(null);
         try {
             const [n, e] = await Promise.all([
-                AnalyticsService.query('nodes'),
-                AnalyticsService.query('similarity_graph', { threshold: t }),
+                service.query('nodes'),
+                service.query('similarity_graph', { threshold: t }),
             ]);
             setNodes(n ?? []);
             setEdges(e ?? []);
+        } catch (e: any) {
+            setGraphError(e?.message ?? 'Failed to load analytics');
         } finally {
             setGraphLoading(false);
         }
-    }, []);
+    }, [service]);
 
     const loadAnalytics = useCallback(async () => {
+        setAnalyticsError(null);
         try {
             const [tools, ips, bl] = await Promise.all([
-                AnalyticsService.query('tool_usage'),
-                AnalyticsService.query('ip_activity'),
-                AnalyticsService.getBlocklist(),
+                service.query('tool_usage'),
+                service.query('ip_activity'),
+                service.getBlocklist(),
             ]);
             setToolRows(tools ?? []);
             setIpRows(ips ?? []);
             setBlocklist(bl ?? []);
-        } catch { /* RDS may be stopped */ }
-    }, []);
+        } catch (e: any) {
+            setAnalyticsError(e?.message ?? 'Failed to load analytics');
+        }
+    }, [service]);
 
     const refreshBlocklist = async () => {
-        const bl = await AnalyticsService.getBlocklist();
+        const bl = await service.getBlocklist();
         setBlocklist(bl ?? []);
     };
 
     const handleBlock = async (ip: string, reason: string) => {
-        await AnalyticsService.addToBlocklist(ip, reason);
+        await service.addToBlocklist(ip, reason);
         await refreshBlocklist();
     };
 
@@ -170,21 +180,21 @@ export default function AnalyticsPage() {
                             <Button
                                 variant="contained"
                                 disabled={actionLoading || rdsStatus === 'available'}
-                                onClick={() => rdsAction(AnalyticsService.startRds)}
+                                onClick={() => rdsAction(() => service.startRds())}
                             >
                                 ▶ Start RDS
                             </Button>
                             <Button
                                 variant="outlined"
                                 disabled={actionLoading || rdsStatus !== 'available'}
-                                onClick={() => rdsAction(AnalyticsService.takeSnapshot)}
+                                onClick={() => rdsAction(() => service.takeSnapshot())}
                             >
                                 ● Backup &amp; Stop
                             </Button>
                             <Button
                                 variant="outlined"
                                 disabled={actionLoading || rdsStatus !== 'available'}
-                                onClick={() => rdsAction(AnalyticsService.stopRds)}
+                                onClick={() => rdsAction(() => service.stopRds())}
                             >
                                 ■ Stop RDS
                             </Button>
@@ -192,7 +202,7 @@ export default function AnalyticsPage() {
                                 variant="outlined"
                                 color="warning"
                                 disabled={actionLoading}
-                                onClick={() => rdsAction(AnalyticsService.restoreSnapshot)}
+                                onClick={() => rdsAction(() => service.restoreSnapshot())}
                             >
                                 ⟳ Restore snapshot
                             </Button>
@@ -218,11 +228,17 @@ export default function AnalyticsPage() {
             <Divider sx={{ my: 3 }} />
 
             {/* Analytics — only visible when RDS is up */}
-            <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+            <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center' }}>
                 <Button variant="outlined" onClick={() => { loadGraph(threshold); loadAnalytics(); }}>
                     Load analytics
                 </Button>
                 {graphLoading && <CircularProgress size={20} />}
+                {graphError && (
+                    <Typography color="error" variant="caption">{graphError}</Typography>
+                )}
+                {analyticsError && (
+                    <Typography color="error" variant="caption">{analyticsError}</Typography>
+                )}
             </Box>
 
             {/* Similarity graph */}
@@ -259,14 +275,14 @@ export default function AnalyticsPage() {
 
             {/* Log miner */}
             <Section title="CloudFront log miner">
-                <LogMiner onBlock={handleBlock} />
+                <LogMiner service={service} onBlock={handleBlock} />
             </Section>
 
             <Divider sx={{ my: 3 }} />
 
             {/* Blocklist */}
             <Section title="IP blocklist">
-                <BlocklistPanel entries={blocklist} onRefresh={refreshBlocklist} />
+                <BlocklistPanel service={service} entries={blocklist} onRefresh={refreshBlocklist} />
             </Section>
         </Box>
     );

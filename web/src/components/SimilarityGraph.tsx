@@ -36,14 +36,11 @@ export default function SimilarityGraph({ nodes, edges }: {
             .force('center', d3.forceCenter(width / 2, height / 2));
 
         const link = svg.append('g').selectAll('line').data(d3Links)
-            .join('line').attr('stroke', '#444').attr('stroke-opacity', 0.6);
+            .join('line').attr('stroke', '#aaa').attr('stroke-opacity', 0.6);
 
         const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
-        const node = (svg.append('g').selectAll('circle').data(d3Nodes)
-            .join('circle') as d3.Selection<SVGCircleElement, any, SVGGElement, unknown>)
-            .attr('r', 6)
-            .attr('fill', (d: any) => colorScale(d.ip))
-            .call(d3.drag<SVGCircleElement, any>()
+        const nodeG = (svg.append('g').selectAll('g').data(d3Nodes).join('g') as d3.Selection<SVGGElement, any, SVGGElement, unknown>)
+            .call(d3.drag<SVGGElement, any>()
                 .on('start', (event, d) => {
                     if (!event.active) simulation.alphaTarget(0.3).restart();
                     d.fx = d.x; d.fy = d.y;
@@ -55,7 +52,17 @@ export default function SimilarityGraph({ nodes, edges }: {
                 })
             );
 
-        node.append('title').text((d: any) => `${d.ip}\n${(d.userMessage ?? '').slice(0, 80)}`);
+        nodeG.append('circle')
+            .attr('r', 6)
+            .attr('fill', (d: any) => colorScale(d.ip));
+
+        nodeG.append('text')
+            .attr('x', 9).attr('y', 4)
+            .attr('font-size', '10px')
+            .attr('fill', '#333')
+            .text((d: any) => `${d.ip} — ${(d.user_message ?? '').slice(0, 40)}`);
+
+        nodeG.append('title').text((d: any) => `${d.ip}\n${(d.user_message ?? '').slice(0, 80)}`);
 
         simulation.on('tick', () => {
             link
@@ -63,11 +70,11 @@ export default function SimilarityGraph({ nodes, edges }: {
                 .attr('y1', (d: any) => d.source.y)
                 .attr('x2', (d: any) => d.target.x)
                 .attr('y2', (d: any) => d.target.y);
-            node.attr('cx', (d: any) => d.x).attr('cy', (d: any) => d.y);
+            nodeG.attr('transform', (d: any) => `translate(${d.x},${d.y})`);
         });
 
         return () => { simulation.stop(); };
     }, [nodes, edges]);
 
-    return <svg ref={svgRef} width="100%" height={600} style={{ background: '#1e1e1e', display: 'block' }} />;
+    return <svg ref={svgRef} width="100%" height={600} style={{ background: '#f8f8f8', display: 'block', border: '1px solid #e0e0e0' }} />;
 }

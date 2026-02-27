@@ -13,9 +13,11 @@ import { AnalyticsService } from '../services/analyticsService';
 interface BlockEntry { ip: string; blockedAt: string; reason: string; }
 
 export default function BlocklistPanel({
+    service,
     entries,
     onRefresh,
 }: {
+    service: AnalyticsService;
     entries: BlockEntry[];
     onRefresh: () => void;
 }) {
@@ -27,7 +29,7 @@ export default function BlocklistPanel({
         if (!newIp.trim()) return;
         setBusy(true);
         try {
-            await AnalyticsService.addToBlocklist(newIp.trim(), newReason.trim());
+            await service.addToBlocklist(newIp.trim(), newReason.trim());
             setNewIp('');
             setNewReason('');
             onRefresh();
@@ -39,7 +41,7 @@ export default function BlocklistPanel({
     const remove = async (ip: string) => {
         setBusy(true);
         try {
-            await AnalyticsService.removeFromBlocklist(ip);
+            await service.removeFromBlocklist(ip);
             onRefresh();
         } finally {
             setBusy(false);
