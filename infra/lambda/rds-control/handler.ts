@@ -95,6 +95,7 @@ export const handler = async (event: any) => {
         else if (path === '/rds/snapshots') action = 'snapshots';
         else if (path === '/rds/restore') action = 'restore';
         else if (path === '/rds/timer') action = 'timer';
+        else if (path === '/rds/extend-timer') action = 'extend-timer';
         else {
             console.error('Unknown path:', path);
             return {
@@ -212,6 +213,18 @@ export const handler = async (event: any) => {
         case 'timer': {
             const shutdownAt = await getShutdownAt();
             result = { shutdownAt: shutdownAt ?? null };
+            break;
+        }
+
+        case 'extend-timer': {
+            const current = await getShutdownAt();
+            const base = current ? new Date(current) : new Date();
+            // Extend from whichever is later: current shutdownAt or now
+            const newShutdownAt = new Date(Math.max(base.getTime(), Date.now()) + TIMER_DURATION_MS);
+            await setShutdownAt(newShutdownAt.toISOString());
+            await deleteShutdownSchedule();
+            await createShutdownSchedule(newShutdownAt);
+            result = { ok: true, shutdownAt: newShutdownAt.toISOString() };
             break;
         }
 
