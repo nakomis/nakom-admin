@@ -40,6 +40,9 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
     const [actionLoading, setActionLoading] = useState(false);
     const [importResult, setImportResult] = useState<string | null>(null);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const [shutdownAt, setShutdownAt] = useState<string | null>(null);
+    const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // Similarity graph
     const [nodes, setNodes] = useState<any[]>([]);
@@ -69,7 +72,37 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
         }
     }, [service]);
 
+    const fetchTimer = useCallback(async () => {
+        try {
+            const r = await service.getTimer();
+            setShutdownAt(r.shutdownAt ?? null);
+        } catch {
+            // non-fatal — timer display just won't show
+        }
+    }, [service]);
+
     useEffect(() => { fetchStatus(); }, [fetchStatus]);
+    useEffect(() => { fetchTimer(); }, [fetchTimer]);
+
+    useEffect(() => {
+        if (!shutdownAt) {
+            if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+            setSecondsLeft(null);
+            return;
+        }
+        const tick = () => {
+            const secs = Math.max(0, Math.round((new Date(shutdownAt).getTime() - Date.now()) / 1000));
+            setSecondsLeft(secs);
+            if (secs === 0) {
+                clearInterval(timerRef.current!);
+                timerRef.current = null;
+                setShutdownAt(null);
+            }
+        };
+        tick();
+        timerRef.current = setInterval(tick, 1000);
+        return () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
+    }, [shutdownAt]);
 
     // Poll while transitioning
     useEffect(() => {
@@ -153,6 +186,12 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
         await refreshBlocklist();
     };
 
+    const formatCountdown = (secs: number) => {
+        const m = Math.floor(secs / 60).toString().padStart(2, '0');
+        const s = (secs % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
+    };
+
     return (
         <Box sx={{ p: 3, maxWidth: 1200 }}>
 
@@ -180,21 +219,21 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                             <Button
                                 variant="contained"
                                 disabled={actionLoading || rdsStatus === 'available'}
-                                onClick={() => rdsAction(() => service.startRds())}
+                                onClick={async () => { await rdsAction(() => service.startRds()); await fetchTimer(); }}
                             >
                                 ▶ Start RDS
                             </Button>
                             <Button
                                 variant="outlined"
                                 disabled={actionLoading || rdsStatus !== 'available'}
-                                onClick={() => rdsAction(() => service.takeSnapshot())}
+                                onClick={async () => { await rdsAction(() => service.takeSnapshot()); setShutdownAt(null); }}
                             >
                                 ● Backup &amp; Stop
                             </Button>
                             <Button
                                 variant="outlined"
                                 disabled={actionLoading || rdsStatus !== 'available'}
-                                onClick={() => rdsAction(() => service.stopRds())}
+                                onClick={async () => { await rdsAction(() => service.stopRds()); setShutdownAt(null); }}
                             >
                                 ■ Stop RDS
                             </Button>
