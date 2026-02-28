@@ -139,10 +139,13 @@ export const handler = async (event: any) => {
             break;
         }
 
-        case 'stop':
+        case 'stop': {
             await rds.send(new StopDBInstanceCommand({ DBInstanceIdentifier: instanceId }));
+            await clearShutdownAt();
+            await deleteShutdownSchedule();
             result = { ok: true };
             break;
+        }
 
         case 'snapshot': {
             const snapshotId = `nakom-admin-${Date.now()}`;
@@ -164,6 +167,8 @@ export const handler = async (event: any) => {
                     DBSnapshotIdentifier: old.DBSnapshotIdentifier!,
                 }));
             }
+            await clearShutdownAt();
+            await deleteShutdownSchedule();
             result = { ok: true, snapshotId };
             break;
         }
