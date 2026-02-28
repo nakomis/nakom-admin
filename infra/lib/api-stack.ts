@@ -119,6 +119,12 @@ export class ApiStack extends cdk.Stack {
             resources: [`arn:aws:scheduler:${region}:${account}:schedule/default/nakom-admin-rds-shutdown`],
         }));
 
+        // Allow rds-control to pass the scheduler role to EventBridge Scheduler
+        rdsControl.addToRolePolicy(new iam.PolicyStatement({
+            actions: ['iam:PassRole'],
+            resources: [schedulerRole.roleArn],
+        }));
+
         // --- import-generate Lambda ---
         const importGenerate = new nodejs.NodejsFunction(this, 'ImportGenerateFn', {
             functionName: 'nakom-admin-import-generate',
