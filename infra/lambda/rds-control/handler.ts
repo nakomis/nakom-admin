@@ -14,7 +14,7 @@ const SNAPSHOTS_TO_KEEP = 4;
 
 const SCHEDULE_NAME = 'nakom-admin-rds-shutdown';
 const SHUTDOWN_AT_PARAM = '/nakom-admin/rds/shutdown-at';
-const TIMER_DURATION_MS = 2 * 60 * 1000;
+const TIMER_DURATION_MS = 30 * 60 * 1000;
 
 async function getInstanceId(): Promise<string> {
     const r = await ssmClient.send(new GetParameterCommand({ Name: '/nakom-admin/rds/instance-id' }));
