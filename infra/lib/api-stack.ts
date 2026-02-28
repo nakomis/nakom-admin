@@ -90,6 +90,9 @@ export class ApiStack extends cdk.Stack {
             ],
         }));
 
+        // Construct the Lambda ARN from its known function name to avoid circular dependency
+        const rdsControlArn = `arn:aws:lambda:${region}:${account}:function:nakom-admin-rds-control`;
+
         // Scheduler IAM role — allows EventBridge Scheduler to invoke rds-control
         const schedulerRole = new iam.Role(this, 'RdsSchedulerRole', {
             roleName: 'nakom-admin-rds-scheduler-role',
@@ -97,11 +100,11 @@ export class ApiStack extends cdk.Stack {
         });
         schedulerRole.addToPolicy(new iam.PolicyStatement({
             actions: ['lambda:InvokeFunction'],
-            resources: [rdsControl.functionArn],
+            resources: [rdsControlArn],
         }));
 
         // Give rds-control its own ARN and the scheduler role ARN
-        rdsControl.addEnvironment('LAMBDA_ARN', rdsControl.functionArn);
+        rdsControl.addEnvironment('LAMBDA_ARN', rdsControlArn);
         rdsControl.addEnvironment('SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
 
         // SSM: read/write/delete the shutdown-at timestamp
