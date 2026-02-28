@@ -100,17 +100,17 @@ export class ApiStack extends cdk.Stack {
             timeout: cdk.Duration.seconds(300),
             bundling,
             environment: {
-                CHAT_LOGS_TABLE: 'nakomis-chat-logs',
+                CHAT_LOGS_TABLE: 'cv-chat-logs',
                 STAGING_BUCKET: analyticsStack.stagingBucket.bucketName,
                 IMPORT_CURSOR_PARAM: '/nakom.is/analytics/CVCHAT/last-imported-timestamp',
                 IMPORT_EXECUTE_FUNCTION_NAME: 'nakom-admin-import-execute',
             },
         });
 
-        // Read nakomis-chat-logs DDB table (same account, eu-west-2)
+        // Read cv-chat-logs DDB table (same account, eu-west-2)
         importGenerate.addToRolePolicy(new iam.PolicyStatement({
             actions: ['dynamodb:Query'],
-            resources: [`arn:aws:dynamodb:${region}:${account}:table/nakomis-chat-logs`],
+            resources: [`arn:aws:dynamodb:${region}:${account}:table/cv-chat-logs`],
         }));
         // Bedrock Titan Embed v2
         importGenerate.addToRolePolicy(new iam.PolicyStatement({
@@ -187,7 +187,7 @@ export class ApiStack extends cdk.Stack {
             bundling,
             environment: {
                 CF_LOGS_BUCKET: 'nakomis-cf-access-logs',
-                CHAT_LOGS_TABLE: 'nakomis-chat-logs',
+                CHAT_LOGS_TABLE: 'cv-chat-logs',
             },
         });
 
@@ -200,7 +200,7 @@ export class ApiStack extends cdk.Stack {
         }));
         monitorLogs.addToRolePolicy(new iam.PolicyStatement({
             actions: ['dynamodb:Query'],
-            resources: [`arn:aws:dynamodb:${region}:${account}:table/nakomis-chat-logs`],
+            resources: [`arn:aws:dynamodb:${region}:${account}:table/cv-chat-logs`],
         }));
 
         // --- blocklist Lambda ---

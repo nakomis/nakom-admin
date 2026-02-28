@@ -35,7 +35,7 @@ export const handler = async () => {
 
     // Query unimported records
     const queryResult = await ddb.send(new QueryCommand({
-        TableName: 'nakomis-chat-logs',
+        TableName: 'cv-chat-logs',
         KeyConditionExpression: 'logType = :lt AND sk > :cursor',
         ExpressionAttributeValues: {
             ':lt': { S: LOG_TYPE },
