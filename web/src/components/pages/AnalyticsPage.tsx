@@ -143,6 +143,18 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
         }
     };
 
+    const extendTimer = async () => {
+        setActionLoading(true);
+        try {
+            const r = await service.extendTimer();
+            setShutdownAt(r.shutdownAt);
+        } catch (e: any) {
+            console.error('Failed to extend timer', e);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     const loadGraph = useCallback(async (t: number) => {
         setGraphLoading(true);
         setGraphError(null);
@@ -259,6 +271,21 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                             <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                                 {importResult}
                             </Typography>
+                        )}
+                        {secondsLeft !== null && (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                                <Typography variant="body2" color="text.secondary">
+                                    ⏱ {formatCountdown(secondsLeft)} remaining
+                                </Typography>
+                                <Button
+                                    size="small"
+                                    variant="outlined"
+                                    onClick={extendTimer}
+                                    disabled={actionLoading}
+                                >
+                                    Extend Time
+                                </Button>
+                            </Box>
                         )}
                     </CardContent>
                 </Card>
