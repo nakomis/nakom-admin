@@ -129,10 +129,15 @@ export const handler = async (event: any) => {
             break;
         }
 
-        case 'start':
+        case 'start': {
             await rds.send(new StartDBInstanceCommand({ DBInstanceIdentifier: instanceId }));
-            result = { ok: true };
+            const shutdownAt = new Date(Date.now() + TIMER_DURATION_MS);
+            await setShutdownAt(shutdownAt.toISOString());
+            await deleteShutdownSchedule(); // clear any stale schedule first
+            await createShutdownSchedule(shutdownAt);
+            result = { ok: true, shutdownAt: shutdownAt.toISOString() };
             break;
+        }
 
         case 'stop':
             await rds.send(new StopDBInstanceCommand({ DBInstanceIdentifier: instanceId }));
