@@ -90,6 +90,41 @@ export class ApiStack extends cdk.Stack {
             ],
         }));
 
+        // Construct the Lambda ARN from its known function name to avoid circular dependency
+        const rdsControlArn = `arn:aws:lambda:${region}:${account}:function:nakom-admin-rds-control`;
+
+        // Scheduler IAM role — allows EventBridge Scheduler to invoke rds-control
+        const schedulerRole = new iam.Role(this, 'RdsSchedulerRole', {
+            roleName: 'nakom-admin-rds-scheduler-role',
+            assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
+        });
+        schedulerRole.addToPolicy(new iam.PolicyStatement({
+            actions: ['lambda:InvokeFunction'],
+            resources: [rdsControlArn],
+        }));
+
+        // Give rds-control its own ARN and the scheduler role ARN
+        rdsControl.addEnvironment('LAMBDA_ARN', rdsControlArn);
+        rdsControl.addEnvironment('SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
+
+        // SSM: read/write/delete the shutdown-at timestamp
+        rdsControl.addToRolePolicy(new iam.PolicyStatement({
+            actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter'],
+            resources: [`arn:aws:ssm:${region}:${account}:parameter/nakom-admin/rds/shutdown-at`],
+        }));
+
+        // EventBridge Scheduler: create and delete the one-shot rule
+        rdsControl.addToRolePolicy(new iam.PolicyStatement({
+            actions: ['scheduler:CreateSchedule', 'scheduler:DeleteSchedule', 'scheduler:GetSchedule'],
+            resources: [`arn:aws:scheduler:${region}:${account}:schedule/default/nakom-admin-rds-shutdown`],
+        }));
+
+        // Allow rds-control to pass the scheduler role to EventBridge Scheduler
+        rdsControl.addToRolePolicy(new iam.PolicyStatement({
+            actions: ['iam:PassRole'],
+            resources: [schedulerRole.roleArn],
+        }));
+
         // --- import-generate Lambda ---
         const importGenerate = new nodejs.NodejsFunction(this, 'ImportGenerateFn', {
             functionName: 'nakom-admin-import-generate',
@@ -247,6 +282,8 @@ export class ApiStack extends cdk.Stack {
         addRoute(apigwv2.HttpMethod.POST, '/rds/stop', rdsControl);
         addRoute(apigwv2.HttpMethod.POST, '/rds/snapshot', rdsControl);
         addRoute(apigwv2.HttpMethod.POST, '/rds/restore', rdsControl);
+        addRoute(apigwv2.HttpMethod.GET, '/rds/timer', rdsControl);
+        addRoute(apigwv2.HttpMethod.POST, '/rds/extend-timer', rdsControl);
 
         addRoute(apigwv2.HttpMethod.POST, '/import/generate', importGenerate);
         addRoute(apigwv2.HttpMethod.POST, '/import/execute', importExecute);

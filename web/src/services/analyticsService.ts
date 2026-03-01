@@ -39,6 +39,8 @@ export class AnalyticsService {
     takeSnapshot() { return apiCall(this.creds, '/rds/snapshot', 'POST'); }
     listSnapshots() { return apiCall<any[]>(this.creds, '/rds/snapshots'); }
     restoreSnapshot() { return apiCall(this.creds, '/rds/restore', 'POST'); }
+    getTimer() { return apiCall<{ shutdownAt: string | null }>(this.creds, '/rds/timer'); }
+    extendTimer() { return apiCall<{ ok: boolean; shutdownAt: string }>(this.creds, '/rds/extend-timer', 'POST'); }
     importGenerate() { return apiCall<{ queued: number }>(this.creds, '/import/generate', 'POST'); }
     query(queryType: string, params?: object) { return apiCall<any[]>(this.creds, `/query/${queryType}`, 'POST', params); }
     mineLogs(days: number) { return apiCall<any>(this.creds, '/logs/mine', 'POST', { days }); }

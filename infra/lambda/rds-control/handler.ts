@@ -4,15 +4,74 @@ import {
     DescribeDBSnapshotsCommand, DescribeDBInstancesCommand,
     RestoreDBInstanceFromDBSnapshotCommand,
 } from '@aws-sdk/client-rds';
-import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
+import { SSMClient, GetParameterCommand, PutParameterCommand, DeleteParameterCommand } from '@aws-sdk/client-ssm';
+import { SchedulerClient, CreateScheduleCommand, DeleteScheduleCommand } from '@aws-sdk/client-scheduler';
 
 const rds = new RDSClient({});
-const ssm = new SSMClient({});
+const ssmClient = new SSMClient({});
+const schedulerClient = new SchedulerClient({});
 const SNAPSHOTS_TO_KEEP = 4;
 
+const SCHEDULE_NAME = 'nakom-admin-rds-shutdown';
+const SHUTDOWN_AT_PARAM = '/nakom-admin/rds/shutdown-at';
+const TIMER_DURATION_MS = 30 * 60 * 1000;
+
 async function getInstanceId(): Promise<string> {
-    const r = await ssm.send(new GetParameterCommand({ Name: '/nakom-admin/rds/instance-id' }));
+    const r = await ssmClient.send(new GetParameterCommand({ Name: '/nakom-admin/rds/instance-id' }));
     return r.Parameter!.Value!;
+}
+
+async function getShutdownAt(): Promise<string | null> {
+    try {
+        const r = await ssmClient.send(new GetParameterCommand({ Name: SHUTDOWN_AT_PARAM }));
+        return r.Parameter?.Value ?? null;
+    } catch (e: any) {
+        if (e.name === 'ParameterNotFound') return null;
+        throw e;
+    }
+}
+
+async function setShutdownAt(iso: string): Promise<void> {
+    await ssmClient.send(new PutParameterCommand({
+        Name: SHUTDOWN_AT_PARAM,
+        Value: iso,
+        Type: 'String',
+        Overwrite: true,
+    }));
+}
+
+async function clearShutdownAt(): Promise<void> {
+    try {
+        await ssmClient.send(new DeleteParameterCommand({ Name: SHUTDOWN_AT_PARAM }));
+    } catch (e: any) {
+        if (e.name !== 'ParameterNotFound') throw e;
+    }
+}
+
+async function createShutdownSchedule(shutdownAt: Date): Promise<void> {
+    // Format: at(yyyy-MM-ddTHH:mm:ss) — EventBridge requires no milliseconds or Z suffix
+    const expr = `at(${shutdownAt.toISOString().replace(/\.\d{3}Z$/, '')})`;
+    await schedulerClient.send(new CreateScheduleCommand({
+        Name: SCHEDULE_NAME,
+        ScheduleExpression: expr,
+        ScheduleExpressionTimezone: 'UTC',
+        Target: {
+            Arn: process.env.LAMBDA_ARN!,
+            RoleArn: process.env.SCHEDULER_ROLE_ARN!,
+            Input: JSON.stringify({ action: 'stop' }),
+        },
+        FlexibleTimeWindow: { Mode: 'OFF' },
+        ActionAfterCompletion: 'DELETE',
+    }));
+}
+
+async function deleteShutdownSchedule(): Promise<void> {
+    try {
+        await schedulerClient.send(new DeleteScheduleCommand({ Name: SCHEDULE_NAME }));
+    } catch (e: any) {
+        if (e.name !== 'ResourceNotFoundException') throw e;
+        // Already deleted (schedule fired and auto-deleted, or never existed)
+    }
 }
 
 export const handler = async (event: any) => {
@@ -35,6 +94,8 @@ export const handler = async (event: any) => {
         else if (path === '/rds/snapshot') action = 'snapshot';
         else if (path === '/rds/snapshots') action = 'snapshots';
         else if (path === '/rds/restore') action = 'restore';
+        else if (path === '/rds/timer') action = 'timer';
+        else if (path === '/rds/extend-timer') action = 'extend-timer';
         else {
             console.error('Unknown path:', path);
             return {
@@ -69,15 +130,23 @@ export const handler = async (event: any) => {
             break;
         }
 
-        case 'start':
+        case 'start': {
             await rds.send(new StartDBInstanceCommand({ DBInstanceIdentifier: instanceId }));
-            result = { ok: true };
+            const shutdownAt = new Date(Date.now() + TIMER_DURATION_MS);
+            await setShutdownAt(shutdownAt.toISOString());
+            await deleteShutdownSchedule(); // clear any stale schedule first
+            await createShutdownSchedule(shutdownAt);
+            result = { ok: true, shutdownAt: shutdownAt.toISOString() };
             break;
+        }
 
-        case 'stop':
+        case 'stop': {
             await rds.send(new StopDBInstanceCommand({ DBInstanceIdentifier: instanceId }));
+            await clearShutdownAt();
+            await deleteShutdownSchedule();
             result = { ok: true };
             break;
+        }
 
         case 'snapshot': {
             const snapshotId = `nakom-admin-${Date.now()}`;
@@ -99,6 +168,8 @@ export const handler = async (event: any) => {
                     DBSnapshotIdentifier: old.DBSnapshotIdentifier!,
                 }));
             }
+            await clearShutdownAt();
+            await deleteShutdownSchedule();
             result = { ok: true, snapshotId };
             break;
         }
@@ -136,6 +207,24 @@ export const handler = async (event: any) => {
                 DBInstanceClass: 'db.t4g.micro',
             }));
             result = { ok: true, newInstanceId: newId };
+            break;
+        }
+
+        case 'timer': {
+            const shutdownAt = await getShutdownAt();
+            result = { shutdownAt: shutdownAt ?? null };
+            break;
+        }
+
+        case 'extend-timer': {
+            const current = await getShutdownAt();
+            const base = current ? new Date(current) : new Date();
+            // Extend from whichever is later: current shutdownAt or now
+            const newShutdownAt = new Date(Math.max(base.getTime(), Date.now()) + TIMER_DURATION_MS);
+            await setShutdownAt(newShutdownAt.toISOString());
+            await deleteShutdownSchedule();
+            await createShutdownSchedule(newShutdownAt);
+            result = { ok: true, shutdownAt: newShutdownAt.toISOString() };
             break;
         }
 
