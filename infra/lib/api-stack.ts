@@ -208,8 +208,12 @@ export class ApiStack extends cdk.Stack {
                 DB_NAME: 'analytics',
                 DB_USER: 'analytics',
                 DB_PASS: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),
+                STAGING_BUCKET: analyticsStack.stagingBucket.bucketName,
             },
         });
+
+        // S3 write for embedding_export fallback (large payloads go to S3 instead of inline)
+        analyticsStack.stagingBucket.grantWrite(queryFn, 'embedding-export/*');
 
         // --- monitor-logs Lambda ---
         const monitorLogs = new nodejs.NodejsFunction(this, 'MonitorLogsFn', {
