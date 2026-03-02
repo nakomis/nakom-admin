@@ -51,6 +51,9 @@ export class ApiStack extends cdk.Stack {
             resources: [this.api.arnForExecuteApi('*', '/*', '*')],
         }));
 
+        // Allow the browser (Cognito authenticated role) to download embedding exports from S3
+        analyticsStack.stagingBucket.grantRead(cognitoStack.authenticatedRole, 'embedding-export/*');
+
         const bundling = { minify: true, sourceMap: true };
         const runtime = lambda.Runtime.NODEJS_20_X;
         const account = this.account;

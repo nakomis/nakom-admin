@@ -159,6 +159,7 @@ export const handler = async (event: any) => {
                     ContentType: 'application/json',
                 }));
 
+                // Browser has Cognito credentials with S3 read access, so return the URI directly
                 return ok({ s3_uri: `s3://${bucket}/${key}` });
             }
 

@@ -2,6 +2,7 @@ node_modules
 *.js
 !jest.config.js
 *.d.ts
+!web/src/plotly-dist-min.d.ts
 .cdk.staging
 cdk.out
 dist
