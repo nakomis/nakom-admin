@@ -108,5 +108,11 @@ export class AnalyticsStack extends cdk.Stack {
             parameterName: '/nakom-admin/staging-bucket',
             stringValue: this.stagingBucket.bucketName,
         });
+
+        // Consumed by nakomis-status to check RDS health without VPC access
+        new ssm.StringParameter(this, 'StatusCheckInstanceIdParam', {
+            parameterName: '/nakomis-status/rds/analytics-instance-id',
+            stringValue: this.dbInstance.instanceIdentifier,
+        });
     }
 }
