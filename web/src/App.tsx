@@ -122,8 +122,17 @@ const App: React.FC = () => {
             <Box sx={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 justifyContent: 'center', height: '100vh',
+                bgcolor: 'background.default', color: 'white',
+                textAlign: 'center',
             }}>
-                <Typography variant="h5" sx={{ mb: 3 }}>nakom-admin</Typography>
+                <Box
+                    component="img"
+                    src="/wolf-white.png"
+                    alt="Nakomis"
+                    sx={{ height: '40vmin', maxHeight: 320, mb: 3, pointerEvents: 'none' }}
+                />
+                <Typography variant="h5" sx={{ mb: 1 }}>Welcome to Nakomis Softworks</Typography>
+                <Typography variant="body1" sx={{ mb: 3, color: 'text.secondary' }}>Login below to continue</Typography>
                 <Button variant="contained" onClick={() => auth.signinRedirect()}>Sign in</Button>
             </Box>
         </ThemeProvider>
