@@ -92,6 +92,16 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
         restyleLabels(showLabels);
     }, [showLabels, status, restyleLabels]);
 
+    // Container transitions from display:none to display:block when status becomes
+    // 'done', so Plotly measured zero width. Re-measure once the paint has settled.
+    useEffect(() => {
+        if (status !== 'done' || !plotRef.current) return;
+        const id = requestAnimationFrame(() => {
+            if (plotRef.current) Plotly.relayout(plotRef.current, { autosize: true } as any);
+        });
+        return () => cancelAnimationFrame(id);
+    }, [status]);
+
     const load = async () => {
         setError(null);
         setShowLabels(true);
