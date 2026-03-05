@@ -59,7 +59,7 @@ export default function SimilarityGraph({ nodes, edges }: {
         nodeG.append('text')
             .attr('x', 9).attr('y', 4)
             .attr('font-size', '10px')
-            .attr('fill', '#333')
+            .attr('fill', '#bcc4d0')
             .text((d: any) => `${d.ip} — ${(d.user_message ?? '').slice(0, 40)}`);
 
         nodeG.append('title').text((d: any) => `${d.ip}\n${(d.user_message ?? '').slice(0, 80)}`);
@@ -76,5 +76,5 @@ export default function SimilarityGraph({ nodes, edges }: {
         return () => { simulation.stop(); };
     }, [nodes, edges]);
 
-    return <svg ref={svgRef} width="100%" height={600} style={{ background: '#f8f8f8', display: 'block', border: '1px solid #e0e0e0' }} />;
+    return <svg ref={svgRef} width="100%" height={600} style={{ background: '#1a2332', display: 'block', border: '1px solid #2a3a4a' }} />;
 }
