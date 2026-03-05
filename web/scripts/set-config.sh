@@ -17,6 +17,12 @@ setValue() {
     sed -i.bk "s|\"$key\": \".*\"|\"$key\": \"$value\"|g" "$CONFIG"
 }
 
+if [ "${1:-}" = "localhost" ]; then
+    BASE_URL="http://localhost:5173"
+else
+    BASE_URL="https://admin.nakom.is"
+fi
+
 UP=$(get AdminCognitoStack UserPoolId)
 CLIENT=$(get AdminCognitoStack UserPoolClientId)
 IP=$(get AdminCognitoStack IdentityPoolId)
@@ -25,6 +31,8 @@ setValue userPoolId "$UP"
 setValue authority "https://cognito-idp.${REGION}.amazonaws.com/${UP}"
 setValue userPoolClientId "$CLIENT"
 setValue identityPoolId "$IP"
+setValue redirectUri "${BASE_URL}/loggedin"
+setValue logoutUri "${BASE_URL}/logout"
 
 rm -f "${CONFIG}.bk"
-echo "Config updated: $CONFIG"
+echo "Config updated: $CONFIG (base URL: $BASE_URL)"
