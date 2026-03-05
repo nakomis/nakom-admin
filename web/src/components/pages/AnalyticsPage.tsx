@@ -189,10 +189,17 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
         }
     }, [service]);
 
-    const refreshBlocklist = async () => {
-        const bl = await service.getBlocklist();
-        setBlocklist(bl ?? []);
-    };
+    const refreshBlocklist = useCallback(async () => {
+        try {
+            const bl = await service.getBlocklist();
+            setBlocklist(bl ?? []);
+        } catch {
+            // silently fail — will retry once credentials are ready
+        }
+    }, [service]);
+
+    // Load blocklist on mount (independent of RDS)
+    useEffect(() => { refreshBlocklist(); }, [refreshBlocklist]);
 
     const handleBlock = async (ip: string, reason: string) => {
         await service.addToBlocklist(ip, reason);
