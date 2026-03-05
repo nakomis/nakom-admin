@@ -6,6 +6,7 @@ import Chip from '@mui/material/Chip';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
+import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Tooltip from '@mui/material/Tooltip';
@@ -106,7 +107,8 @@ export default function LogMiner({ service, onBlock }: { service: AnalyticsServi
                     <Typography variant="caption" color="text.secondary">
                         {result.period} — {result.filesScanned} files scanned
                     </Typography>
-                    <Table size="small" sx={{ mt: 1 }}>
+                    <TableContainer sx={{ maxHeight: 400, mt: 1 }}>
+                    <Table size="small" stickyHeader>
                         <TableHead>
                             <TableRow>
                                 <TableCell>IP</TableCell>
@@ -150,6 +152,7 @@ export default function LogMiner({ service, onBlock }: { service: AnalyticsServi
                             ))}
                         </TableBody>
                     </Table>
+                    </TableContainer>
                 </Box>
             )}
         </Box>

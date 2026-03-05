@@ -1,6 +1,7 @@
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
+import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Button from '@mui/material/Button';
@@ -20,7 +21,8 @@ export default function IpActivityTable({ rows, onBlock }: {
 }) {
     if (rows.length === 0) return null;
     return (
-        <Table size="small" sx={{ fontFamily: 'monospace' }}>
+        <TableContainer sx={{ maxHeight: 400 }}>
+        <Table size="small" stickyHeader sx={{ fontFamily: 'monospace' }}>
             <TableHead>
                 <TableRow>
                     <TableCell>IP</TableCell>
@@ -50,5 +52,6 @@ export default function IpActivityTable({ rows, onBlock }: {
                 ))}
             </TableBody>
         </Table>
+        </TableContainer>
     );
 }
