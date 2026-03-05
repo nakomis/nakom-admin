@@ -1,13 +1,10 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Box from '@mui/material/Box';
-import Card from '@mui/material/Card';
-import CardContent from '@mui/material/CardContent';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
 import Slider from '@mui/material/Slider';
 import Typography from '@mui/material/Typography';
-import Divider from '@mui/material/Divider';
 import { AnalyticsService } from '../../services/analyticsService';
 import EmbeddingVisualizer from '../EmbeddingVisualizer';
 import SimilarityGraph from '../SimilarityGraph';
@@ -26,7 +23,14 @@ function StatusChip({ status }: { status: string }) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
-        <Box sx={{ mb: 4 }}>
+        <Box sx={{
+            mb: 3,
+            p: 3,
+            background: 'linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%)',
+            borderRadius: '12px',
+            border: '1px solid #404040',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+        }}>
             <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>{title}</Typography>
             {children}
         </Box>
@@ -189,10 +193,17 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
         }
     }, [service]);
 
-    const refreshBlocklist = async () => {
-        const bl = await service.getBlocklist();
-        setBlocklist(bl ?? []);
-    };
+    const refreshBlocklist = useCallback(async () => {
+        try {
+            const bl = await service.getBlocklist();
+            setBlocklist(bl ?? []);
+        } catch {
+            // silently fail — will retry once credentials are ready
+        }
+    }, [service]);
+
+    // Load blocklist on mount (independent of RDS)
+    useEffect(() => { refreshBlocklist(); }, [refreshBlocklist]);
 
     const handleBlock = async (ip: string, reason: string) => {
         await service.addToBlocklist(ip, reason);
@@ -210,14 +221,12 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
 
             {/* RDS Control */}
             <Section title="RDS Control">
-                <Card>
-                    <CardContent>
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                 <Typography>Status:</Typography>
-                                {statusLoading
-                                    ? <CircularProgress size={16} />
-                                    : <StatusChip status={rdsStatus} />}
+                                <Box sx={{ opacity: statusLoading ? 0.4 : 1, transition: 'opacity 0.2s' }}>
+                                    <StatusChip status={rdsStatus} />
+                                </Box>
                                 {rdsEndpoint && (
                                     <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
                                         {rdsEndpoint}
@@ -288,25 +297,23 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                                 </Button>
                             </Box>
                         )}
-                    </CardContent>
-                </Card>
             </Section>
 
-            <Divider sx={{ my: 3 }} />
-
             {/* Analytics — only visible when RDS is up */}
-            <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center' }}>
-                <Button variant="outlined" onClick={() => { loadGraph(threshold); loadAnalytics(); }}>
-                    Load analytics
-                </Button>
-                {graphLoading && <CircularProgress size={20} />}
-                {graphError && (
-                    <Typography color="error" variant="caption">{graphError}</Typography>
-                )}
-                {analyticsError && (
-                    <Typography color="error" variant="caption">{analyticsError}</Typography>
-                )}
-            </Box>
+            <Section title="Analytics">
+                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                    <Button variant="outlined" onClick={() => { loadGraph(threshold); loadAnalytics(); }}>
+                        Load analytics
+                    </Button>
+                    {graphLoading && <CircularProgress size={20} />}
+                    {graphError && (
+                        <Typography color="error" variant="caption">{graphError}</Typography>
+                    )}
+                    {analyticsError && (
+                        <Typography color="error" variant="caption">{analyticsError}</Typography>
+                    )}
+                </Box>
+            </Section>
 
             {/* Similarity graph */}
             {nodes.length > 0 && (
@@ -345,14 +352,12 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                 </Section>
             )}
 
-            <Divider sx={{ my: 3 }} />
 
             {/* Log miner */}
             <Section title="CloudFront log miner">
                 <LogMiner service={service} onBlock={handleBlock} />
             </Section>
 
-            <Divider sx={{ my: 3 }} />
 
             {/* Blocklist */}
             <Section title="IP blocklist">

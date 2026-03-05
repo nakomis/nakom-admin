@@ -1,5 +1,4 @@
 import { createTheme } from '@mui/material/styles';
-import { blue, green } from '@mui/material/colors';
 
 export const theme = createTheme({
     typography: {
@@ -7,8 +6,12 @@ export const theme = createTheme({
         fontSize: 14,
     },
     palette: {
-        mode: 'light',
-        primary: { main: blue['A700'] },
-        secondary: { main: green[900] },
+        mode: 'dark',
+        primary: { main: '#1976d2' },
+        secondary: { main: '#81c784' },
+        background: {
+            default: '#282c34',
+            paper: '#1e1e1e',
+        },
     },
 });

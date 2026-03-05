@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -21,19 +21,21 @@ const PALETTE = [
 
 function buildTraces(records: EmbeddingRecord[], coords: number[][]): Plotly.Data[] {
     // Group by country so each gets its own legend entry and colour
-    const groups = new Map<string, { x: number[]; y: number[]; z: number[]; text: string[] }>();
+    const groups = new Map<string, { x: number[]; y: number[]; z: number[]; labelText: string[]; hoverText: string[] }>();
 
     records.forEach((r, i) => {
         const country = r.country ?? 'Unknown';
-        if (!groups.has(country)) groups.set(country, { x: [], y: [], z: [], text: [] });
+        if (!groups.has(country)) groups.set(country, { x: [], y: [], z: [], labelText: [], hoverText: [] });
         const g = groups.get(country)!;
         g.x.push(coords[i][0]);
         g.y.push(coords[i][1]);
         g.z.push(coords[i][2]);
         // Truncate long messages for the tooltip; escape HTML to prevent XSS
         const raw = r.user_message ?? '';
+        const dateStr = new Date(r.recorded_at).toLocaleDateString('en-GB');
         const msg = escapeHtml(raw.length > 120 ? raw.slice(0, 120) + '…' : raw);
-        g.text.push(`<b>${escapeHtml(country)}</b><br>${new Date(r.recorded_at).toLocaleDateString('en-GB')}<br>${msg}`);
+        g.hoverText.push(`<b>${escapeHtml(country)}</b><br>${dateStr}<br>${msg}`);
+        g.labelText.push(`${dateStr} · ${escapeHtml(raw.slice(0, 30))}`);
     });
 
     return Array.from(groups.entries()).map(([country, g], idx) => ({
@@ -43,8 +45,11 @@ function buildTraces(records: EmbeddingRecord[], coords: number[][]): Plotly.Dat
         x: g.x,
         y: g.y,
         z: g.z,
-        text: g.text,
-        hovertemplate: '%{text}<extra></extra>',
+        text: g.labelText,
+        hovertext: g.hoverText,
+        hovertemplate: '%{hovertext}<extra></extra>',
+        textposition: 'top center' as const,
+        textfont: { size: 9, color: '#bcc4d0' },
         marker: {
             size: 4,
             color: PALETTE[idx % PALETTE.length],
@@ -57,6 +62,7 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
     const [status, setStatus] = useState<Status>('idle');
     const [error, setError] = useState<string | null>(null);
     const [recordCount, setRecordCount] = useState<number | null>(null);
+    const [showLabels, setShowLabels] = useState(true);
     const plotRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -65,8 +71,40 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
         };
     }, []);
 
+    // 't' keyboard shortcut toggles point labels on the 3D graph
+    useEffect(() => {
+        if (status !== 'done') return;
+        const handler = (e: KeyboardEvent) => {
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+            if (e.key === 't' || e.key === 'T') setShowLabels(prev => !prev);
+        };
+        document.addEventListener('keydown', handler);
+        return () => document.removeEventListener('keydown', handler);
+    }, [status]);
+
+    const restyleLabels = useCallback((show: boolean) => {
+        if (!plotRef.current) return;
+        Plotly.restyle(plotRef.current, { mode: show ? 'markers+text' : 'markers' } as any);
+    }, []);
+
+    useEffect(() => {
+        if (status !== 'done') return;
+        restyleLabels(showLabels);
+    }, [showLabels, status, restyleLabels]);
+
+    // Container transitions from display:none to display:block when status becomes
+    // 'done', so Plotly measured zero width. Re-measure once the paint has settled.
+    useEffect(() => {
+        if (status !== 'done' || !plotRef.current) return;
+        const id = requestAnimationFrame(() => {
+            if (plotRef.current) Plotly.relayout(plotRef.current, { autosize: true } as any);
+        });
+        return () => cancelAnimationFrame(id);
+    }, [status]);
+
     const load = async () => {
         setError(null);
+        setShowLabels(true);
         setStatus('fetching');
         try {
             const records = await service.exportEmbeddings();
@@ -93,16 +131,17 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
             // Render with Plotly
             const traces = buildTraces(records, coords);
             const layout: Partial<Plotly.Layout> = {
-                paper_bgcolor: '#1e1e1e',
-                plot_bgcolor: '#1e1e1e',
+                paper_bgcolor: '#1a2332',
+                plot_bgcolor: '#1a2332',
                 font: { color: '#e0e0e0' },
                 margin: { l: 0, r: 0, t: 0, b: 0 },
                 legend: { bgcolor: 'rgba(0,0,0,0.4)', bordercolor: '#444', borderwidth: 1 },
+                modebar: { bgcolor: 'rgba(26,35,50,0.85)', color: '#8090a0', activecolor: '#1976d2' } as any,
                 scene: {
-                    bgcolor: '#1e1e1e',
-                    xaxis: { showgrid: true, gridcolor: '#333', showticklabels: false, title: { text: '' } },
-                    yaxis: { showgrid: true, gridcolor: '#333', showticklabels: false, title: { text: '' } },
-                    zaxis: { showgrid: true, gridcolor: '#333', showticklabels: false, title: { text: '' } },
+                    bgcolor: '#1a2332',
+                    xaxis: { showgrid: true, gridcolor: '#3a5575', showticklabels: false, title: { text: '' } },
+                    yaxis: { showgrid: true, gridcolor: '#3a5575', showticklabels: false, title: { text: '' } },
+                    zaxis: { showgrid: true, gridcolor: '#3a5575', showticklabels: false, title: { text: '' } },
                     camera: { eye: { x: 1.5, y: 1.5, z: 1.0 } },
                 },
             };
@@ -144,7 +183,7 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
 
                 {status === 'done' && recordCount !== null && (
                     <Typography variant="body2" color="text.secondary">
-                        {recordCount} records · drag to rotate · scroll to zoom
+                        {recordCount} records · drag to rotate · scroll to zoom · t {showLabels ? 'hides' : 'shows'} labels
                     </Typography>
                 )}
 
