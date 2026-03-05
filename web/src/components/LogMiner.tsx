@@ -8,12 +8,18 @@ import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { AnalyticsService } from '../services/analyticsService';
 
 const FLAG_COLORS: Record<string, 'error' | 'warning' | 'default'> = {
     SCANNER: 'error',
     HIGH_VOLUME: 'warning',
+};
+
+const FLAG_DESCRIPTIONS: Record<string, string> = {
+    SCANNER: 'High proportion of requests for known scanner paths (e.g. /.env, /wp-admin, /phpmyadmin)',
+    HIGH_VOLUME: 'Unusually high request volume compared to other IPs in the period',
 };
 
 export default function LogMiner({ service, onBlock }: { service: AnalyticsService; onBlock: (ip: string, reason: string) => void }) {
@@ -67,7 +73,9 @@ export default function LogMiner({ service, onBlock }: { service: AnalyticsServi
                                     <TableCell align="right">{(s.errorRate * 100).toFixed(1)}%</TableCell>
                                     <TableCell>
                                         {(s.flags ?? []).map((f: string) => (
-                                            <Chip key={f} label={f} size="small" color={FLAG_COLORS[f] ?? 'default'} sx={{ mr: 0.5 }} />
+                                            <Tooltip key={f} title={FLAG_DESCRIPTIONS[f] ?? f} arrow>
+                                                <Chip label={f} size="small" color={FLAG_COLORS[f] ?? 'default'} sx={{ mr: 0.5 }} />
+                                            </Tooltip>
                                         ))}
                                     </TableCell>
                                     <TableCell>
