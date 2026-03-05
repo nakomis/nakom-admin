@@ -215,9 +215,9 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                 <Typography>Status:</Typography>
-                                {statusLoading
-                                    ? <CircularProgress size={16} />
-                                    : <StatusChip status={rdsStatus} />}
+                                <Box sx={{ opacity: statusLoading ? 0.4 : 1, transition: 'opacity 0.2s' }}>
+                                    <StatusChip status={rdsStatus} />
+                                </Box>
                                 {rdsEndpoint && (
                                     <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
                                         {rdsEndpoint}
