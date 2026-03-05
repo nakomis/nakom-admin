@@ -131,7 +131,7 @@ const App: React.FC = () => {
                     alt="Nakomis"
                     sx={{ height: '40vmin', maxHeight: 320, mb: 3, pointerEvents: 'none' }}
                 />
-                <Typography variant="h5" sx={{ mb: 1 }}>Welcome to Nakomis Softworks</Typography>
+                <Typography variant="h5" sx={{ mb: 1 }}>Nakomis Softworks Admin Console</Typography>
                 <Typography variant="body1" sx={{ mb: 3, color: 'text.secondary' }}>Login below to continue</Typography>
                 <Button variant="contained" onClick={() => auth.signinRedirect()}>Sign in</Button>
             </Box>
