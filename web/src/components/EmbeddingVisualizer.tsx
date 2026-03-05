@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -8,6 +8,10 @@ import Plotly from 'plotly.js-dist-min';
 import { AnalyticsService, EmbeddingRecord } from '../services/analyticsService';
 
 type Status = 'idle' | 'fetching' | 'reducing' | 'done' | 'error';
+
+function escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 // Stable sequence of colours for country groups
 const PALETTE = [
@@ -26,11 +30,10 @@ function buildTraces(records: EmbeddingRecord[], coords: number[][]): Plotly.Dat
         g.x.push(coords[i][0]);
         g.y.push(coords[i][1]);
         g.z.push(coords[i][2]);
-        // Truncate long messages for the tooltip
-        const msg = r.user_message?.length > 120
-            ? r.user_message.slice(0, 120) + '…'
-            : (r.user_message ?? '');
-        g.text.push(`<b>${country}</b><br>${new Date(r.recorded_at).toLocaleDateString('en-GB')}<br>${msg}`);
+        // Truncate long messages for the tooltip; escape HTML to prevent XSS
+        const raw = r.user_message ?? '';
+        const msg = escapeHtml(raw.length > 120 ? raw.slice(0, 120) + '…' : raw);
+        g.text.push(`<b>${escapeHtml(country)}</b><br>${new Date(r.recorded_at).toLocaleDateString('en-GB')}<br>${msg}`);
     });
 
     return Array.from(groups.entries()).map(([country, g], idx) => ({
@@ -55,6 +58,12 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
     const [error, setError] = useState<string | null>(null);
     const [recordCount, setRecordCount] = useState<number | null>(null);
     const plotRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        return () => {
+            if (plotRef.current) Plotly.purge(plotRef.current);
+        };
+    }, []);
 
     const load = async () => {
         setError(null);

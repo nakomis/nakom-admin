@@ -118,18 +118,21 @@ export const handler = async (event: any) => {
             }
 
             case 'embedding_export': {
-                // Fetch all records with their embeddings for dimensionality-reduction visualisation.
+                // Fetch records with their embeddings for dimensionality-reduction visualisation.
                 // pgvector returns the embedding column as a JSON-array string e.g. "[0.1,0.2,...]",
                 // so we cast to text and parse on the way out.
+                // user_message is truncated in SQL to avoid inflating the payload unnecessarily.
+                const exportLimit = params?.limit ?? 5000;
                 const rows = await db.query(`
                     SELECT id,
                            recorded_at,
                            country,
-                           user_message,
+                           LEFT(user_message, 150) AS user_message,
                            embedding::text AS embedding
                     FROM chat_logs
                     ORDER BY recorded_at
-                `);
+                    LIMIT $1
+                `, [exportLimit]);
 
                 const records = rows.rows.map(r => ({
                     id:           r.id,

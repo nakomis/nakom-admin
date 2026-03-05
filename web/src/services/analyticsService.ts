@@ -59,7 +59,8 @@ export class AnalyticsService {
         if (result.records) return result.records;
 
         // Large payload: Lambda wrote to S3. Fetch it using our Cognito credentials.
-        const uri = result.s3_uri!;
+        const uri = result.s3_uri;
+        if (!uri) throw new Error('API returned neither records nor s3_uri');
         const match = uri.match(/^s3:\/\/([^/]+)\/(.+)$/);
         if (!match) throw new Error(`Unexpected s3_uri format: ${uri}`);
         const [, bucket, key] = match;
@@ -77,6 +78,7 @@ export class AnalyticsService {
         const res = await signedFetch(url);
         if (!res.ok) throw new Error(`S3 fetch failed: ${res.status}`);
         const { records } = await res.json();
+        if (!records) throw new Error('S3 payload missing records field');
         return records;
     }
 
