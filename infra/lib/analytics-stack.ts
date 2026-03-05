@@ -84,10 +84,26 @@ export class AnalyticsStack extends cdk.Stack {
             blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
             encryption: s3.BucketEncryption.S3_MANAGED,
             enforceSSL: true,
-            lifecycleRules: [{
-                expiration: cdk.Duration.days(1),
-                prefix: 'import-staging/',
-            }],
+            cors: [
+                {
+                    // Allow the admin frontend (prod and local dev) to fetch embedding-export objects directly with SigV4
+                    allowedOrigins: ['https://admin.nakom.is', 'http://localhost:5173'],
+                    allowedMethods: [s3.HttpMethods.GET],
+                    allowedHeaders: ['*'],
+                    maxAge: 3000,
+                },
+            ],
+            lifecycleRules: [
+                {
+                    expiration: cdk.Duration.days(1),
+                    prefix: 'import-staging/',
+                },
+                {
+                    // Embedding exports are one-shot downloads; clean up after a week
+                    expiration: cdk.Duration.days(7),
+                    prefix: 'embedding-export/',
+                },
+            ],
             removalPolicy: cdk.RemovalPolicy.RETAIN,
         });
 

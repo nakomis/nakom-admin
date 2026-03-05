@@ -9,6 +9,7 @@ import Slider from '@mui/material/Slider';
 import Typography from '@mui/material/Typography';
 import Divider from '@mui/material/Divider';
 import { AnalyticsService } from '../../services/analyticsService';
+import EmbeddingVisualizer from '../EmbeddingVisualizer';
 import SimilarityGraph from '../SimilarityGraph';
 import ToolUsageChart from '../ToolUsageChart';
 import IpActivityTable from '../IpActivityTable';
@@ -320,6 +321,13 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                         />
                     </Box>
                     <SimilarityGraph nodes={nodes} edges={edges} />
+                </Section>
+            )}
+
+            {/* Embedding visualisation — always available once analytics are loaded */}
+            {(nodes.length > 0 || toolRows.length > 0) && (
+                <Section title="Embedding space (3D UMAP)">
+                    <EmbeddingVisualizer service={service} />
                 </Section>
             )}
 

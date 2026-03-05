@@ -1,4 +1,10 @@
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Client as PgClient } from 'pg';
+
+const s3 = new S3Client({});
+
+// Payload size threshold below which we return inline rather than via S3
+const INLINE_LIMIT_BYTES = 5 * 1024 * 1024; // 5 MB
 
 // Reuse DB connection across warm invocations
 let pgClient: PgClient | null = null;
@@ -109,6 +115,55 @@ export const handler = async (event: any) => {
                     LIMIT 100
                 `);
                 return ok(rows.rows);
+            }
+
+            case 'embedding_export': {
+                // Fetch records with their embeddings for dimensionality-reduction visualisation.
+                // pgvector returns the embedding column as a JSON-array string e.g. "[0.1,0.2,...]",
+                // so we cast to text and parse on the way out.
+                // user_message is truncated in SQL to avoid inflating the payload unnecessarily.
+                const exportLimit = params?.limit ?? 5000;
+                const rows = await db.query(`
+                    SELECT id,
+                           recorded_at,
+                           country,
+                           LEFT(user_message, 150) AS user_message,
+                           embedding::text AS embedding
+                    FROM chat_logs
+                    ORDER BY recorded_at
+                    LIMIT $1
+                `, [exportLimit]);
+
+                const records = rows.rows.map(r => ({
+                    id:           r.id,
+                    recorded_at:  r.recorded_at,
+                    country:      r.country,
+                    user_message: r.user_message,
+                    embedding:    JSON.parse(r.embedding) as number[],
+                }));
+
+                const payload = JSON.stringify({ records });
+
+                // Return inline if small enough, otherwise spill to S3
+                if (Buffer.byteLength(payload) < INLINE_LIMIT_BYTES) {
+                    return ok({ records });
+                }
+
+                const bucket = process.env.STAGING_BUCKET;
+                if (!bucket) {
+                    return err(500, 'STAGING_BUCKET not configured and payload exceeds inline limit');
+                }
+
+                const key = `embedding-export/${Date.now()}.json`;
+                await s3.send(new PutObjectCommand({
+                    Bucket: bucket,
+                    Key: key,
+                    Body: payload,
+                    ContentType: 'application/json',
+                }));
+
+                // Browser has Cognito credentials with S3 read access, so return the URI directly
+                return ok({ s3_uri: `s3://${bucket}/${key}` });
             }
 
             default:
