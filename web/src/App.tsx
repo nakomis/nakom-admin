@@ -7,6 +7,7 @@ import AppBar from '@mui/material/AppBar';
 import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
 import { ThemeProvider } from '@mui/material/styles';
+import CssBaseline from '@mui/material/CssBaseline';
 import { theme } from './theme';
 import Config from './config/config';
 import AnalyticsPage from './components/pages/AnalyticsPage';
@@ -89,6 +90,7 @@ const App: React.FC = () => {
     if (auth.isAuthenticated) {
         return (
             <ThemeProvider theme={theme}>
+                <CssBaseline />
                 <AppBar position="static">
                     <Box sx={{ display: 'flex', alignItems: 'center' }}>
                         <Tabs
@@ -116,6 +118,7 @@ const App: React.FC = () => {
 
     return (
         <ThemeProvider theme={theme}>
+            <CssBaseline />
             <Box sx={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 justifyContent: 'center', height: '100vh',
