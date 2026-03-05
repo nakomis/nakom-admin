@@ -62,7 +62,7 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
     const [status, setStatus] = useState<Status>('idle');
     const [error, setError] = useState<string | null>(null);
     const [recordCount, setRecordCount] = useState<number | null>(null);
-    const [showLabels, setShowLabels] = useState(false);
+    const [showLabels, setShowLabels] = useState(true);
     const plotRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -94,7 +94,7 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
 
     const load = async () => {
         setError(null);
-        setShowLabels(false);
+        setShowLabels(true);
         setStatus('fetching');
         try {
             const records = await service.exportEmbeddings();
@@ -173,7 +173,7 @@ export default function EmbeddingVisualizer({ service }: { service: AnalyticsSer
 
                 {status === 'done' && recordCount !== null && (
                     <Typography variant="body2" color="text.secondary">
-                        {recordCount} records · drag to rotate · scroll to zoom · T {showLabels ? 'hides' : 'shows'} labels
+                        {recordCount} records · drag to rotate · scroll to zoom · t {showLabels ? 'hides' : 'shows'} labels
                     </Typography>
                 )}
 
