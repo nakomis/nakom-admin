@@ -69,8 +69,59 @@ async function getDb(): Promise<PgClient> {
     return pgClient;
 }
 
-export const handler = async (event: { stagingBucket: string; stagingKey: string }) => {
-    const records = await getS3Json(event.stagingBucket, event.stagingKey);
+async function migrateFromLegacy(): Promise<{ statusCode: number; headers: any; body: string }> {
+    const legacyHost = process.env.DB_HOST_LEGACY;
+    if (!legacyHost) {
+        return { statusCode: 400, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'DB_HOST_LEGACY not set' }) };
+    }
+
+    const legacy = new PgClient({
+        host: legacyHost,
+        port: 5432,
+        database: process.env.DB_NAME ?? 'analytics',
+        user: process.env.DB_USER ?? 'analytics',
+        password: process.env.DB_PASS,
+        ssl: { rejectUnauthorized: false },
+        connectionTimeoutMillis: 10000,
+    });
+    await legacy.connect();
+
+    const { rows } = await legacy.query('SELECT * FROM chat_logs ORDER BY recorded_at');
+    await legacy.end();
+
+    const db = await getDb();
+    let migrated = 0;
+
+    for (const row of rows) {
+        await db.query(`
+            INSERT INTO chat_logs (id, log_type, conversation_id, recorded_at, ip, user_agent,
+                country, user_message, message_count, tools_called, input_tokens, output_tokens,
+                duration_ms, rate_limited, embedding)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::vector)
+            ON CONFLICT (id) DO NOTHING
+        `, [row.id, row.log_type, row.conversation_id, row.recorded_at, row.ip, row.user_agent,
+            row.country, row.user_message, row.message_count, row.tools_called,
+            row.input_tokens, row.output_tokens, row.duration_ms, row.rate_limited,
+            row.embedding]);
+        migrated++;
+    }
+
+    return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ migrated, total: rows.length }),
+    };
+}
+
+export const handler = async (event: any) => {
+    // One-time data migration from legacy RDS to Aurora
+    if (event.rawPath === '/import/migrate-from-legacy') {
+        return migrateFromLegacy();
+    }
+
+    // Standard import: read records from S3 and insert into Aurora
+    const { stagingBucket, stagingKey } = event;
+    const records = await getS3Json(stagingBucket, stagingKey);
     const db = await getDb();
 
     // Bulk insert with ON CONFLICT DO NOTHING (idempotent)

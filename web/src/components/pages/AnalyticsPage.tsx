@@ -16,7 +16,7 @@ import { Credentials } from '@aws-sdk/client-cognito-identity';
 
 function StatusChip({ status }: { status: string }) {
     const color = status === 'available' ? 'success'
-        : status === 'stopped' ? 'default'
+        : status === 'stopped' || status === 'paused' ? 'default'
         : 'warning';
     return <Chip label={status} color={color as any} size="small" />;
 }
@@ -45,9 +45,6 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
     const [actionLoading, setActionLoading] = useState(false);
     const [importResult, setImportResult] = useState<string | null>(null);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const [shutdownAt, setShutdownAt] = useState<string | null>(null);
-    const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
-    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // Similarity graph
     const [nodes, setNodes] = useState<any[]>([]);
@@ -77,41 +74,11 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
         }
     }, [service]);
 
-    const fetchTimer = useCallback(async () => {
-        try {
-            const r = await service.getTimer();
-            setShutdownAt(r.shutdownAt ?? null);
-        } catch {
-            // non-fatal — timer display just won't show
-        }
-    }, [service]);
-
     useEffect(() => { fetchStatus(); }, [fetchStatus]);
-    useEffect(() => { fetchTimer(); }, [fetchTimer]);
-
-    useEffect(() => {
-        if (!shutdownAt) {
-            if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-            setSecondsLeft(null);
-            return;
-        }
-        const tick = () => {
-            const secs = Math.max(0, Math.round((new Date(shutdownAt).getTime() - Date.now()) / 1000));
-            setSecondsLeft(secs);
-            if (secs === 0) {
-                clearInterval(timerRef.current!);
-                timerRef.current = null;
-                setShutdownAt(null);
-            }
-        };
-        tick();
-        timerRef.current = setInterval(tick, 1000);
-        return () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
-    }, [shutdownAt]);
 
     // Poll while transitioning
     useEffect(() => {
-        if (rdsStatus === 'starting' || rdsStatus === 'stopping') {
+        if (rdsStatus === 'starting' || rdsStatus === 'stopping' || rdsStatus === 'pausing' || rdsStatus === 'resuming') {
             if (!pollRef.current) {
                 pollRef.current = setInterval(fetchStatus, 5000);
             }
@@ -143,18 +110,6 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
             setImportResult(`Queued ${r.queued} records`);
         } catch (e: any) {
             setImportResult(`Error: ${e.message}`);
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
-    const extendTimer = async () => {
-        setActionLoading(true);
-        try {
-            const r = await service.extendTimer();
-            setShutdownAt(r.shutdownAt);
-        } catch (e: any) {
-            console.error('Failed to extend timer', e);
         } finally {
             setActionLoading(false);
         }
@@ -210,17 +165,11 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
         await refreshBlocklist();
     };
 
-    const formatCountdown = (secs: number) => {
-        const m = Math.floor(secs / 60).toString().padStart(2, '0');
-        const s = (secs % 60).toString().padStart(2, '0');
-        return `${m}:${s}`;
-    };
-
     return (
         <Box sx={{ p: 3, maxWidth: 1200 }}>
 
-            {/* RDS Control */}
-            <Section title="RDS Control">
+            {/* Aurora Database */}
+            <Section title="Aurora Database">
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                 <Typography>Status:</Typography>
@@ -229,7 +178,7 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                                 </Box>
                                 {rdsEndpoint && (
                                     <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                                        {rdsEndpoint}
+                                        {rdsEndpoint.split('.')[0]}
                                     </Typography>
                                 )}
                             </Box>
@@ -239,25 +188,11 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                         </Box>
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
                             <Button
-                                variant="contained"
-                                disabled={actionLoading || rdsStatus === 'available'}
-                                onClick={async () => { await rdsAction(() => service.startRds()); await fetchTimer(); }}
-                            >
-                                ▶ Start RDS
-                            </Button>
-                            <Button
                                 variant="outlined"
                                 disabled={actionLoading || rdsStatus !== 'available'}
-                                onClick={async () => { await rdsAction(() => service.takeSnapshot()); setShutdownAt(null); }}
+                                onClick={() => rdsAction(() => service.takeSnapshot())}
                             >
-                                ● Backup &amp; Stop
-                            </Button>
-                            <Button
-                                variant="outlined"
-                                disabled={actionLoading || rdsStatus !== 'available'}
-                                onClick={async () => { await rdsAction(() => service.stopRds()); setShutdownAt(null); }}
-                            >
-                                ■ Stop RDS
+                                ● Backup
                             </Button>
                             <Button
                                 variant="outlined"
@@ -281,21 +216,6 @@ export default function AnalyticsPage({ creds }: { creds: Credentials }) {
                             <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                                 {importResult}
                             </Typography>
-                        )}
-                        {secondsLeft !== null && (
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-                                <Typography variant="body2" color="text.secondary">
-                                    ⏱ {formatCountdown(secondsLeft)} remaining
-                                </Typography>
-                                <Button
-                                    size="small"
-                                    variant="outlined"
-                                    onClick={extendTimer}
-                                    disabled={actionLoading}
-                                >
-                                    Extend Time
-                                </Button>
-                            </Box>
                         )}
             </Section>
 

@@ -26,6 +26,7 @@ fi
 UP=$(get AdminCognitoStack UserPoolId)
 CLIENT=$(get AdminCognitoStack UserPoolClientId)
 IP=$(get AdminCognitoStack IdentityPoolId)
+API=$(get AdminApiStack ApiCustomDomainUrl)
 
 setValue userPoolId "$UP"
 setValue authority "https://cognito-idp.${REGION}.amazonaws.com/${UP}"
@@ -33,6 +34,7 @@ setValue userPoolClientId "$CLIENT"
 setValue identityPoolId "$IP"
 setValue redirectUri "${BASE_URL}/loggedin"
 setValue logoutUri "${BASE_URL}/logout"
+setValue apiEndpoint "$API"
 
 rm -f "${CONFIG}.bk"
 echo "Config updated: $CONFIG (base URL: $BASE_URL)"

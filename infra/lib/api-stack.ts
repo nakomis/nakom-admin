@@ -72,17 +72,20 @@ export class ApiStack extends cdk.Stack {
 
         rdsControl.addToRolePolicy(new iam.PolicyStatement({
             actions: [
-                'rds:StartDBInstance',
-                'rds:StopDBInstance',
-                'rds:CreateDBSnapshot',
-                'rds:DeleteDBSnapshot',
-                'rds:DescribeDBSnapshots',
-                'rds:DescribeDBInstances',
-                'rds:RestoreDBInstanceFromDBSnapshot',
+                'rds:StartDBCluster',
+                'rds:StopDBCluster',
+                'rds:CreateDBClusterSnapshot',
+                'rds:DeleteDBClusterSnapshot',
+                'rds:DescribeDBClusterSnapshots',
+                'rds:DescribeDBClusters',
+                'rds:RestoreDBClusterFromSnapshot',
+                'rds:CreateDBInstance',
             ],
             resources: [
-                analyticsStack.dbInstance.instanceArn,
-                `arn:aws:rds:${region}:${account}:snapshot:*`,
+                analyticsStack.dbCluster.clusterArn,
+                `arn:aws:rds:${region}:${account}:cluster-snapshot:*`,
+                `arn:aws:rds:${region}:${account}:cluster:*`,
+                `arn:aws:rds:${region}:${account}:db:*`,
             ],
         }));
         // SSM reads for RDS instance ID and secret ARN
@@ -184,7 +187,7 @@ export class ApiStack extends cdk.Stack {
             securityGroups: [analyticsStack.lambdaSecurityGroup],
             environment: {
                 STAGING_BUCKET: analyticsStack.stagingBucket.bucketName,
-                DB_HOST: analyticsStack.dbInstance.dbInstanceEndpointAddress,
+                DB_HOST: analyticsStack.dbCluster.clusterEndpoint.hostname,
                 DB_NAME: 'analytics',
                 DB_USER: 'analytics',
                 DB_PASS: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),
@@ -207,7 +210,7 @@ export class ApiStack extends cdk.Stack {
             vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
             securityGroups: [analyticsStack.lambdaSecurityGroup],
             environment: {
-                DB_HOST: analyticsStack.dbInstance.dbInstanceEndpointAddress,
+                DB_HOST: analyticsStack.dbCluster.clusterEndpoint.hostname,
                 DB_NAME: 'analytics',
                 DB_USER: 'analytics',
                 DB_PASS: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),

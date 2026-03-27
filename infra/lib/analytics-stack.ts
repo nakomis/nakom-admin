@@ -7,7 +7,7 @@ import { Construct } from 'constructs';
 
 export class AnalyticsStack extends cdk.Stack {
     readonly vpc: ec2.Vpc;
-    readonly dbInstance: rds.DatabaseInstance;
+    readonly dbCluster: rds.DatabaseCluster;
     readonly dbSecret: rds.DatabaseSecret;
     readonly stagingBucket: s3.Bucket;
     readonly rdsSecurityGroup: ec2.SecurityGroup;
@@ -57,24 +57,32 @@ export class AnalyticsStack extends cdk.Stack {
             secretName: 'nakom-admin/rds/analytics',
         });
 
-        // RDS t4g.micro PostgreSQL 16
-        this.dbInstance = new rds.DatabaseInstance(this, 'AnalyticsDb', {
-            engine: rds.DatabaseInstanceEngine.postgres({
-                version: rds.PostgresEngineVersion.VER_16,
+        // Aurora Serverless v2 PostgreSQL cluster.
+        // serverlessV2MinCapacity=0 enables auto-pause when idle (scales to 0 ACUs, no charge),
+        // auto-resumes on first connection. The cluster is never "stopped", so it does not
+        // hit the 7-day auto-restart that affects stopped RDS instances.
+        //
+        // Use fromPassword (not fromSecret) so CDK doesn't create a second SecretTargetAttachment
+        // for the same secret — Secrets Manager only allows one attachment per secret, and the
+        // old RDS instance already has one. The cluster uses the same username/password.
+        this.dbCluster = new rds.DatabaseCluster(this, 'AnalyticsCluster', {
+            engine: rds.DatabaseClusterEngine.auroraPostgres({
+                version: rds.AuroraPostgresEngineVersion.VER_16_4,
             }),
-            instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO),
-            credentials: rds.Credentials.fromSecret(this.dbSecret),
-            databaseName: 'analytics',
+            writer: rds.ClusterInstance.serverlessV2('writer'),
+            serverlessV2MinCapacity: 0,
+            serverlessV2MaxCapacity: 1,
+            credentials: rds.Credentials.fromPassword(
+                'analytics',
+                this.dbSecret.secretValueFromJson('password'),
+            ),
+            defaultDatabaseName: 'analytics',
             vpc: this.vpc,
             vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
             securityGroups: [this.rdsSecurityGroup],
-            multiAz: false,
-            allocatedStorage: 20,
-            storageType: rds.StorageType.GP2,
             deletionProtection: true,
             removalPolicy: cdk.RemovalPolicy.RETAIN,
-            // Disable automated backups (instance is stopped most of the time)
-            backupRetention: cdk.Duration.days(0),
+            backup: { retention: cdk.Duration.days(1) },
         });
 
         // S3 staging bucket: import-generate writes embedding JSON here;
@@ -107,10 +115,10 @@ export class AnalyticsStack extends cdk.Stack {
             removalPolicy: cdk.RemovalPolicy.RETAIN,
         });
 
-        // SSM params for out-of-VPC Lambdas to find the RDS instance
+        // SSM params for out-of-VPC Lambdas to find the Aurora cluster
         new ssm.StringParameter(this, 'DbEndpointParam', {
             parameterName: '/nakom-admin/rds/endpoint',
-            stringValue: this.dbInstance.dbInstanceEndpointAddress,
+            stringValue: this.dbCluster.clusterEndpoint.hostname,
         });
         new ssm.StringParameter(this, 'DbSecretArnParam', {
             parameterName: '/nakom-admin/rds/secret-arn',
@@ -118,17 +126,17 @@ export class AnalyticsStack extends cdk.Stack {
         });
         new ssm.StringParameter(this, 'DbInstanceIdParam', {
             parameterName: '/nakom-admin/rds/instance-id',
-            stringValue: this.dbInstance.instanceIdentifier,
+            stringValue: this.dbCluster.clusterIdentifier,
         });
         new ssm.StringParameter(this, 'StagingBucketParam', {
             parameterName: '/nakom-admin/staging-bucket',
             stringValue: this.stagingBucket.bucketName,
         });
 
-        // Consumed by nakomis-status to check RDS health without VPC access
+        // Consumed by nakomis-status to check Aurora cluster health without VPC access
         new ssm.StringParameter(this, 'StatusCheckInstanceIdParam', {
             parameterName: '/nakomis-status/rds/analytics-instance-id',
-            stringValue: this.dbInstance.instanceIdentifier,
+            stringValue: this.dbCluster.clusterIdentifier,
         });
     }
 }

@@ -1,8 +1,9 @@
 import {
-    RDSClient, StartDBInstanceCommand, StopDBInstanceCommand,
-    CreateDBSnapshotCommand, DeleteDBSnapshotCommand,
-    DescribeDBSnapshotsCommand, DescribeDBInstancesCommand,
-    RestoreDBInstanceFromDBSnapshotCommand,
+    RDSClient,
+    StartDBClusterCommand, StopDBClusterCommand,
+    CreateDBClusterSnapshotCommand, DeleteDBClusterSnapshotCommand,
+    DescribeDBClusterSnapshotsCommand, DescribeDBClustersCommand,
+    RestoreDBClusterFromSnapshotCommand, CreateDBInstanceCommand,
 } from '@aws-sdk/client-rds';
 import { SSMClient, GetParameterCommand, PutParameterCommand, DeleteParameterCommand } from '@aws-sdk/client-ssm';
 import { SchedulerClient, CreateScheduleCommand, DeleteScheduleCommand } from '@aws-sdk/client-scheduler';
@@ -16,7 +17,7 @@ const SCHEDULE_NAME = 'nakom-admin-rds-shutdown';
 const SHUTDOWN_AT_PARAM = '/nakom-admin/rds/shutdown-at';
 const TIMER_DURATION_MS = 30 * 60 * 1000;
 
-async function getInstanceId(): Promise<string> {
+async function getClusterId(): Promise<string> {
     const r = await ssmClient.send(new GetParameterCommand({ Name: '/nakom-admin/rds/instance-id' }));
     return r.Parameter!.Value!;
 }
@@ -86,7 +87,6 @@ export const handler = async (event: any) => {
     } else if (event.rawPath && event.requestContext) {
         // HTTP API Gateway event
         const path = event.rawPath;
-        const method = event.requestContext.http?.method || event.httpMethod;
 
         if (path === '/rds/status') action = 'status';
         else if (path === '/rds/start') action = 'start';
@@ -116,22 +116,22 @@ export const handler = async (event: any) => {
     console.log('Determined action:', action);
 
     try {
-        const instanceId = await getInstanceId();
-        console.log('Instance ID:', instanceId);
+        const clusterId = await getClusterId();
+        console.log('Cluster ID:', clusterId);
 
         let result;
         switch (action) {
         case 'status': {
-            const r = await rds.send(new DescribeDBInstancesCommand({
-                DBInstanceIdentifier: instanceId,
+            const r = await rds.send(new DescribeDBClustersCommand({
+                DBClusterIdentifier: clusterId,
             }));
-            const db = r.DBInstances?.[0];
-            result = { status: db?.DBInstanceStatus, endpoint: db?.Endpoint?.Address };
+            const db = r.DBClusters?.[0];
+            result = { status: db?.Status, endpoint: db?.Endpoint };
             break;
         }
 
         case 'start': {
-            await rds.send(new StartDBInstanceCommand({ DBInstanceIdentifier: instanceId }));
+            await rds.send(new StartDBClusterCommand({ DBClusterIdentifier: clusterId }));
             const shutdownAt = new Date(Date.now() + TIMER_DURATION_MS);
             await setShutdownAt(shutdownAt.toISOString());
             await deleteShutdownSchedule(); // clear any stale schedule first
@@ -141,7 +141,7 @@ export const handler = async (event: any) => {
         }
 
         case 'stop': {
-            await rds.send(new StopDBInstanceCommand({ DBInstanceIdentifier: instanceId }));
+            await rds.send(new StopDBClusterCommand({ DBClusterIdentifier: clusterId }));
             await clearShutdownAt();
             await deleteShutdownSchedule();
             result = { ok: true };
@@ -150,22 +150,22 @@ export const handler = async (event: any) => {
 
         case 'snapshot': {
             const snapshotId = `nakom-admin-${Date.now()}`;
-            await rds.send(new CreateDBSnapshotCommand({
-                DBInstanceIdentifier: instanceId,
-                DBSnapshotIdentifier: snapshotId,
+            await rds.send(new CreateDBClusterSnapshotCommand({
+                DBClusterIdentifier: clusterId,
+                DBClusterSnapshotIdentifier: snapshotId,
             }));
             // Prune old snapshots — keep SNAPSHOTS_TO_KEEP most recent
-            const all = await rds.send(new DescribeDBSnapshotsCommand({
-                DBInstanceIdentifier: instanceId,
+            const all = await rds.send(new DescribeDBClusterSnapshotsCommand({
+                DBClusterIdentifier: clusterId,
                 SnapshotType: 'manual',
             }));
-            const sorted = (all.DBSnapshots ?? [])
+            const sorted = (all.DBClusterSnapshots ?? [])
                 .filter(s => s.Status === 'available')
                 .sort((a, b) => (b.SnapshotCreateTime?.getTime() ?? 0) - (a.SnapshotCreateTime?.getTime() ?? 0));
 
             for (const old of sorted.slice(SNAPSHOTS_TO_KEEP)) {
-                await rds.send(new DeleteDBSnapshotCommand({
-                    DBSnapshotIdentifier: old.DBSnapshotIdentifier!,
+                await rds.send(new DeleteDBClusterSnapshotCommand({
+                    DBClusterSnapshotIdentifier: old.DBClusterSnapshotIdentifier!,
                 }));
             }
             await clearShutdownAt();
@@ -175,24 +175,24 @@ export const handler = async (event: any) => {
         }
 
         case 'snapshots': {
-            const r = await rds.send(new DescribeDBSnapshotsCommand({
-                DBInstanceIdentifier: instanceId,
+            const r = await rds.send(new DescribeDBClusterSnapshotsCommand({
+                DBClusterIdentifier: clusterId,
                 SnapshotType: 'manual',
             }));
-            result = r.DBSnapshots
+            result = r.DBClusterSnapshots
                 ?.filter(s => s.Status === 'available')
                 .sort((a, b) => (b.SnapshotCreateTime?.getTime() ?? 0) - (a.SnapshotCreateTime?.getTime() ?? 0))
-                .map(s => ({ id: s.DBSnapshotIdentifier, createdAt: s.SnapshotCreateTime, sizeGb: s.AllocatedStorage }))
+                .map(s => ({ id: s.DBClusterSnapshotIdentifier, createdAt: s.SnapshotCreateTime, sizeGb: s.AllocatedStorage }))
                 ?? [];
             break;
         }
 
         case 'restore': {
-            const all = await rds.send(new DescribeDBSnapshotsCommand({
-                DBInstanceIdentifier: instanceId,
+            const all = await rds.send(new DescribeDBClusterSnapshotsCommand({
+                DBClusterIdentifier: clusterId,
                 SnapshotType: 'manual',
             }));
-            const latest = (all.DBSnapshots ?? [])
+            const latest = (all.DBClusterSnapshots ?? [])
                 .filter(s => s.Status === 'available')
                 .sort((a, b) => (b.SnapshotCreateTime?.getTime() ?? 0) - (a.SnapshotCreateTime?.getTime() ?? 0))[0];
             if (!latest) {
@@ -200,13 +200,21 @@ export const handler = async (event: any) => {
                 break;
             }
 
-            const newId = `${instanceId}-restored-${Date.now()}`;
-            await rds.send(new RestoreDBInstanceFromDBSnapshotCommand({
-                DBInstanceIdentifier: newId,
-                DBSnapshotIdentifier: latest.DBSnapshotIdentifier!,
-                DBInstanceClass: 'db.t4g.micro',
+            const newClusterId = `${clusterId}-restored-${Date.now()}`;
+            await rds.send(new RestoreDBClusterFromSnapshotCommand({
+                DBClusterIdentifier: newClusterId,
+                SnapshotIdentifier: latest.DBClusterSnapshotIdentifier!,
+                Engine: 'aurora-postgresql',
+                ServerlessV2ScalingConfiguration: { MinCapacity: 0, MaxCapacity: 1 },
             }));
-            result = { ok: true, newInstanceId: newId };
+            // Add a serverless writer instance to the restored cluster
+            await rds.send(new CreateDBInstanceCommand({
+                DBInstanceIdentifier: `${newClusterId}-writer`,
+                DBInstanceClass: 'db.serverless',
+                Engine: 'aurora-postgresql',
+                DBClusterIdentifier: newClusterId,
+            }));
+            result = { ok: true, newClusterId };
             break;
         }
 

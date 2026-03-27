@@ -46,7 +46,7 @@ export const handler = async () => {
     }));
 
     const items = queryResult.Items ?? [];
-    if (items.length === 0) return { imported: 0 };
+    if (items.length === 0) return { queued: 0 };
 
     // Generate embeddings and build record batch
     const records = [];
