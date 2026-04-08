@@ -6,6 +6,12 @@ Admin dashboard for [nakom.is](https://nakom.is) — chat analytics, on-demand R
 **Account:** nakom.is-admin (AWS eu-west-2)
 **Licence:** CC0-1.0
 
+## Support
+
+If you find this useful, please consider buying me a coffee:
+
+[![Donate with PayPal](https://www.paypalobjects.com/en_GB/i/btn/btn_donate_SM.gif)](https://www.paypal.com/donate?hosted_button_id=Q3BESC73EWVNN)
+
 ## Architecture
 
 <!-- drawio: docs/diagrams/architecture.drawio -->
