@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
+import * as fs from 'fs';
 import { CertificateStack } from '../lib/certificate-stack';
 import { CognitoStack } from '../lib/cognito-stack';
 import { AnalyticsStack } from '../lib/analytics-stack';
@@ -35,4 +36,6 @@ const cloudfrontStack = new CloudfrontStack(app, 'AdminCloudfrontStack', {
     apiOriginDomain: apiStack.api.apiEndpoint,
 });
 
+const { version: infraVersion } = JSON.parse(fs.readFileSync('./version.json', 'utf-8'));
 cdk.Tags.of(app).add('MH-Project', 'nakom-admin');
+cdk.Tags.of(app).add('MH-Version', infraVersion);
