@@ -99,6 +99,10 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: npm ci
+      - name: Create stub config for CI build
+        working-directory: web/src/config
+        run: |
+          echo '{"aws":{"region":"eu-west-2"},"cognito":{"authority":"","userPoolId":"","userPoolClientId":"","cognitoDomain":"","redirectUri":"","logoutUri":"","identityPoolId":""},"apiEndpoint":""}' > config.json
       - name: Build
         working-directory: web
         run: npm run build
