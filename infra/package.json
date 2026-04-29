@@ -4,7 +4,9 @@
   "scripts": {
     "build": "tsc",
     "synth": "cdk synth",
-    "deploy": "cdk deploy"
+    "deploy": "cdk deploy",
+    "test": "jest --passWithNoTests",
+    "ci-synth": "cdk synth --output cdk-synth.out"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.998.0",
