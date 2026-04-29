@@ -55,7 +55,7 @@ export class ApiStack extends cdk.Stack {
         analyticsStack.stagingBucket.grantRead(cognitoStack.authenticatedRole, 'embedding-export/*');
 
         const bundling = { minify: true, sourceMap: true };
-        const runtime = lambda.Runtime.NODEJS_20_X;
+        const runtime = lambda.Runtime.NODEJS_22_X;
         const account = this.account;
         const region = this.region;
 
