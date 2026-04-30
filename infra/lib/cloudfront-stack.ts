@@ -78,8 +78,11 @@ function handler(event) {
         const additionalBehaviors: Record<string, cloudfront.BehaviorOptions> = {};
 
         if (props.apiOriginDomain) {
+            // apiOriginDomain is a CDK Token at synth time — .replace() won't work.
+            // Use Fn.select/split to strip the https:// prefix at the CloudFormation level.
+            const apiHost = cdk.Fn.select(1, cdk.Fn.split('https://', props.apiOriginDomain));
             additionalBehaviors['/api/*'] = {
-                origin: new origins.HttpOrigin(props.apiOriginDomain.replace('https://', ''), {
+                origin: new origins.HttpOrigin(apiHost, {
                     originId: 'AdminApiOrigin',
                     originPath: '/prod',
                 }),
