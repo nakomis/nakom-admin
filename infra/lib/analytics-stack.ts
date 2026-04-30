@@ -4,6 +4,11 @@ import * as rds from 'aws-cdk-lib/aws-rds';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
+import { DeployEnv, getEnvConfig } from './env-config';
+
+export interface AnalyticsStackProps extends cdk.StackProps {
+    deployEnv: DeployEnv;
+}
 
 export class AnalyticsStack extends cdk.Stack {
     readonly vpc: ec2.Vpc;
@@ -13,8 +18,10 @@ export class AnalyticsStack extends cdk.Stack {
     readonly rdsSecurityGroup: ec2.SecurityGroup;
     readonly lambdaSecurityGroup: ec2.SecurityGroup;
 
-    constructor(scope: Construct, id: string, props: cdk.StackProps) {
+    constructor(scope: Construct, id: string, props: AnalyticsStackProps) {
         super(scope, id, props);
+
+        const config = getEnvConfig(props.deployEnv);
 
         // VPC — no NAT, isolated private subnets only
         this.vpc = new ec2.Vpc(this, 'AnalyticsVpc', {
@@ -88,14 +95,14 @@ export class AnalyticsStack extends cdk.Stack {
         // S3 staging bucket: import-generate writes embedding JSON here;
         // import-execute Lambda (in VPC) reads it via the Gateway endpoint
         this.stagingBucket = new s3.Bucket(this, 'StagingBucket', {
-            bucketName: 'nakomis-analytics-staging',
+            bucketName: config.stagingBucketName,
             blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
             encryption: s3.BucketEncryption.S3_MANAGED,
             enforceSSL: true,
             cors: [
                 {
                     // Allow the admin frontend (prod and local dev) to fetch embedding-export objects directly with SigV4
-                    allowedOrigins: ['https://admin.nakom.is', 'http://localhost:5173'],
+                    allowedOrigins: [`https://${config.domainName}`, 'http://localhost:5173'],
                     allowedMethods: [s3.HttpMethods.GET],
                     allowedHeaders: ['*'],
                     maxAge: 3000,
