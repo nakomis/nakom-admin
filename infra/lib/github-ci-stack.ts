@@ -1,6 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import { DeployEnv, getEnvConfig } from './env-config';
@@ -8,15 +7,13 @@ import { DeployEnv, getEnvConfig } from './env-config';
 export interface GithubCiStackProps extends cdk.StackProps {
     deployEnv: DeployEnv;
     githubOidcProviderArn: string;
-    webBucket: s3.IBucket;
-    webDistribution: cloudfront.Distribution;
 }
 
 export class GithubCiStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props: GithubCiStackProps) {
         super(scope, id, props);
 
-        const { deployEnv, githubOidcProviderArn, webBucket, webDistribution } = props;
+        const { deployEnv, githubOidcProviderArn } = props;
         const config = getEnvConfig(deployEnv);
 
         const oidcProvider = iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(
@@ -41,7 +38,8 @@ export class GithubCiStack extends cdk.Stack {
             resources: [`arn:aws:iam::${config.account}:role/cdk-hnb659fds-*`],
         }));
 
-        // Web deploy: sync SPA to S3
+        // Web deploy: sync SPA to S3 — import bucket by name to avoid cross-stack reference
+        const webBucket = s3.Bucket.fromBucketName(this, 'WebBucket', config.webBucketName);
         webBucket.grantReadWrite(ciRole);
         ciRole.addToPolicy(new iam.PolicyStatement({
             actions: ['s3:ListBucket'],
@@ -52,10 +50,10 @@ export class GithubCiStack extends cdk.Stack {
             resources: [`${webBucket.bucketArn}/*`],
         }));
 
-        // Web deploy: CloudFront invalidation
+        // Web deploy: CloudFront invalidation — scoped to this account's distributions
         ciRole.addToPolicy(new iam.PolicyStatement({
             actions: ['cloudfront:CreateInvalidation'],
-            resources: [webDistribution.distributionArn],
+            resources: [`arn:aws:cloudfront::${config.account}:distribution/*`],
         }));
 
         // Web deploy: read SSM params to generate config.json
