@@ -93,6 +93,108 @@ export class CognitoStack extends cdk.Stack {
             stringValue: config.domainName,
         });
 
+        // Required for the new Cognito Managed Login to serve the login page.
+        // Without this record, Managed Login returns 403 "Login pages unavailable".
+        new cognito.CfnManagedLoginBranding(this, 'AdminManagedLoginBranding', {
+            userPoolId,
+            clientId: this.userPoolClient.userPoolClientId,
+            useCognitoProvidedValues: false,
+            settings: {
+                components: {
+                    secondaryButton: {
+                        darkMode: {
+                            hover: { backgroundColor: '353b45ff', borderColor: '528bffff', textColor: 'ffffffff' },
+                            defaults: { backgroundColor: '2c313aff', borderColor: '3e4451ff', textColor: 'abb2bfff' },
+                            active: { backgroundColor: '21252bff', borderColor: '3e4451ff', textColor: 'ffffffff' },
+                        },
+                    },
+                    form: {
+                        borderRadius: 8.0,
+                        backgroundImage: { enabled: false },
+                        logo: { location: 'CENTER', position: 'TOP', enabled: false, formInclusion: 'IN' },
+                        darkMode: { backgroundColor: '2c313aff', borderColor: '3e4451ff' },
+                    },
+                    alert: {
+                        borderRadius: 4.0,
+                        darkMode: { error: { backgroundColor: '3a1515ff', borderColor: 'e06c75ff' } },
+                    },
+                    favicon: { enabledTypes: ['ICO', 'SVG'] },
+                    pageBackground: {
+                        image: { enabled: false },
+                        darkMode: { color: '282c34ff' },
+                    },
+                    pageText: {
+                        darkMode: {
+                            bodyColor: 'abb2bfff',
+                            headingColor: 'ffffffff',
+                            descriptionColor: '5c6370ff',
+                        },
+                    },
+                    primaryButton: {
+                        darkMode: {
+                            hover: { backgroundColor: '1d4ed8ff', textColor: 'ffffffff' },
+                            defaults: { backgroundColor: '2563ebff', textColor: 'ffffffff' },
+                            active: { backgroundColor: '1e40afff', textColor: 'ffffffff' },
+                            disabled: { backgroundColor: '2c313aff', borderColor: '3e4451ff' },
+                        },
+                    },
+                    phoneNumberSelector: { displayType: 'TEXT' },
+                    pageHeader: {
+                        backgroundImage: { enabled: false },
+                        logo: { location: 'START', enabled: false },
+                        darkMode: { borderColor: '3e4451ff', background: { color: '21252bff' } },
+                    },
+                    pageFooter: {
+                        backgroundImage: { enabled: false },
+                        logo: { location: 'START', enabled: false },
+                        darkMode: { borderColor: '3e4451ff', background: { color: '21252bff' } },
+                    },
+                    idpButton: {
+                        standard: {
+                            darkMode: {
+                                hover: { backgroundColor: '353b45ff', borderColor: '528bffff', textColor: 'ffffffff' },
+                                defaults: { backgroundColor: '2c313aff', borderColor: '3e4451ff', textColor: 'abb2bfff' },
+                                active: { backgroundColor: '21252bff', borderColor: '3e4451ff', textColor: 'ffffffff' },
+                            },
+                        },
+                        custom: {},
+                    },
+                },
+                componentClasses: {
+                    input: {
+                        borderRadius: 6.0,
+                        darkMode: {
+                            defaults: { backgroundColor: '21252bff', borderColor: '3e4451ff' },
+                            placeholderColor: '5c6370ff',
+                        },
+                    },
+                    inputDescription: { darkMode: { textColor: '5c6370ff' } },
+                    optionControls: {
+                        darkMode: {
+                            defaults: { backgroundColor: '21252bff', borderColor: '3e4451ff' },
+                            selected: { backgroundColor: '2563ebff', foregroundColor: 'ffffffff' },
+                        },
+                    },
+                    inputLabel: { darkMode: { textColor: 'abb2bfff' } },
+                    link: {
+                        darkMode: {
+                            hover: { textColor: '528bffff' },
+                            defaults: { textColor: '61afefff' },
+                        },
+                    },
+                    focusState: { darkMode: { borderColor: '528bffff' } },
+                },
+                categories: {
+                    global: {
+                        colorSchemeMode: 'DARK',
+                        pageFooter: { enabled: false },
+                        pageHeader: { enabled: false },
+                        spacingDensity: 'REGULAR',
+                    },
+                },
+            },
+        });
+
         new cdk.CfnOutput(this, 'UserPoolId', { value: userPoolId });
         new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId });
         new cdk.CfnOutput(this, 'IdentityPoolId', { value: this.identityPool.ref });
