@@ -12,13 +12,15 @@ get() {
 
 LOGIN_DOMAIN=$(get cognito/login-domain)
 APP_DOMAIN=$(get app-domain)
+USER_POOL_ID=$(get cognito/user-pool-id)
+REGION="eu-west-2"
 
 cat > "$CONFIG" <<JSON
 {
-  "aws": { "region": "eu-west-2" },
+  "aws": { "region": "$REGION" },
   "cognito": {
-    "authority":        "https://$LOGIN_DOMAIN",
-    "userPoolId":       "$(get cognito/user-pool-id)",
+    "authority":        "https://cognito-idp.$REGION.amazonaws.com/$USER_POOL_ID",
+    "userPoolId":       "$USER_POOL_ID",
     "userPoolClientId": "$(get cognito/client-id)",
     "cognitoDomain":    "$LOGIN_DOMAIN",
     "redirectUri":      "https://$APP_DOMAIN/loggedin",
