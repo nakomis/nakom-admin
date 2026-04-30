@@ -84,7 +84,7 @@ jobs:
       - run: npm ci
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::975050268859:role/nakomis-nakom-admin-github-ci-sandbox
           aws-region: eu-west-2
       - name: CDK synth (sandbox)
         run: npm run ci-synth-sandbox
@@ -141,7 +141,7 @@ jobs:
       - run: npm ci
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::975050268859:role/nakomis-nakom-admin-github-ci-sandbox
           aws-region: eu-west-2
       - name: CDK deploy (sandbox)
         run: npm run ci-deploy-sandbox
@@ -166,7 +166,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::975050268859:role/nakomis-nakom-admin-github-ci-sandbox
           aws-region: eu-west-2
       - name: Generate config.json from SSM
         working-directory: web
@@ -212,7 +212,7 @@ jobs:
       - run: npm ci
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::637423226886:role/nakomis-nakom-admin-github-ci-prod
           aws-region: eu-west-2
       - name: CDK deploy (prod)
         run: npm run ci-deploy-prod
@@ -237,7 +237,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::637423226886:role/nakomis-nakom-admin-github-ci-prod
           aws-region: eu-west-2
       - name: Generate config.json from SSM
         working-directory: web
