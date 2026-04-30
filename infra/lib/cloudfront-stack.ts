@@ -12,7 +12,6 @@ import { DeployEnv, getEnvConfig } from './env-config';
 
 export interface CloudfrontStackProps extends cdk.StackProps {
     deployEnv: DeployEnv;
-    certificate: acm.Certificate;
     apiOriginDomain?: string; // set after ApiStack deploys
 }
 
@@ -24,6 +23,19 @@ export class CloudfrontStack extends cdk.Stack {
         super(scope, id, props);
 
         const config = getEnvConfig(props.deployEnv);
+
+        const zone = route53.HostedZone.fromLookup(this, 'Zone', {
+            domainName: config.zoneName,
+        });
+
+        // DnsValidatedCertificate creates the cert in us-east-1 via a custom resource
+        // within this eu-west-2 stack, avoiding CDK's cross-stack ExportsWriter guard
+        // which blocks cert ARN updates while CloudFront still reads the old value.
+        const certificate = new acm.DnsValidatedCertificate(this, 'AdminCert', {
+            domainName: config.domainName,
+            hostedZone: zone,
+            region: 'us-east-1',
+        });
 
         // Creates the bucket on first deploy; silently adopts it if it already exists.
         // This documents the intended configuration even when the bucket pre-dates the stack.
@@ -113,12 +125,9 @@ function handler(event) {
             // No global error responses - handled per behavior
             // API calls should return real errors, SPA routes need index.html
             domainNames: [config.domainName],
-            certificate: props.certificate,
+            certificate,
         });
 
-        const zone = route53.HostedZone.fromLookup(this, 'Zone', {
-            domainName: config.zoneName,
-        });
         new route53.ARecord(this, 'AdminARecord', {
             zone,
             recordName: 'admin',
