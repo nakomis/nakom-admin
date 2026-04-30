@@ -82,12 +82,19 @@ jobs:
           cache: npm
           cache-dependency-path: infra/package-lock.json
       - run: npm ci
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Configure AWS credentials (sandbox)
+        id: aws-creds
+        uses: aws-actions/configure-aws-credentials@v4
+        continue-on-error: true
         with:
           role-to-assume: arn:aws:iam::975050268859:role/nakomis-nakom-admin-github-ci-sandbox
           aws-region: eu-west-2
       - name: CDK synth (sandbox)
+        if: steps.aws-creds.outcome == 'success'
         run: npm run ci-synth-sandbox
+      - name: Skip notice
+        if: steps.aws-creds.outcome != 'success'
+        run: echo "⚠️ Sandbox not yet bootstrapped — skipping synth (run deploy AdminGithubCiStack manually first)"
 
   # ── React / Web ───────────────────────────────────────────────────────────────
   web:
