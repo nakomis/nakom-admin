@@ -34,6 +34,9 @@ export class CognitoStack extends cdk.Stack {
 
         this.userPoolClient = this.userPool.addClient('AdminWebClient', {
             userPoolClientName: `nakom-admin-${deployEnv}`,
+            authFlows: {
+                userSrp: true,
+            },
             oAuth: {
                 flows: { authorizationCodeGrant: true },
                 scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
