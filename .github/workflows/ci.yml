@@ -57,14 +57,18 @@ jobs:
         working-directory: infra
         run: npm test
 
-  # ── CDK synth (validates template on PRs and pushes) ─────────────────────────
-  synth-infra:
-    name: CDK synth
+  # ── CDK synth with sandbox credentials (validates template on PRs and pushes) ─
+  synth-infra-sandbox:
+    name: CDK synth (sandbox)
     runs-on: ubuntu-latest
     needs: [changes, infra]
     if: |
       (needs.changes.outputs.infra == 'true' || github.event_name == 'workflow_dispatch') &&
       needs.infra.result == 'success'
+    environment: sandbox
+    permissions:
+      id-token: write
+      contents: read
     defaults:
       run:
         working-directory: infra
@@ -78,8 +82,19 @@ jobs:
           cache: npm
           cache-dependency-path: infra/package-lock.json
       - run: npm ci
-      - name: CDK synth
-        run: npm run ci-synth
+      - name: Configure AWS credentials (sandbox)
+        id: aws-creds
+        uses: aws-actions/configure-aws-credentials@v4
+        continue-on-error: true
+        with:
+          role-to-assume: arn:aws:iam::975050268859:role/nakomis-nakom-admin-github-ci-sandbox
+          aws-region: eu-west-2
+      - name: CDK synth (sandbox)
+        if: steps.aws-creds.outcome == 'success'
+        run: npm run ci-synth-sandbox
+      - name: Skip notice
+        if: steps.aws-creds.outcome != 'success'
+        run: echo "⚠️ Sandbox not yet bootstrapped — skipping synth (run deploy AdminGithubCiStack manually first)"
 
   # ── React / Web ───────────────────────────────────────────────────────────────
   web:
@@ -107,18 +122,164 @@ jobs:
         working-directory: web
         run: npm run build
 
+  # ── Deploy: sandbox (push to main only, auto) ─────────────────────────────────
+  deploy-infra-sandbox:
+    name: Deploy infra (sandbox)
+    runs-on: ubuntu-latest
+    needs: [changes, infra, synth-infra-sandbox, web]
+    if: |
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
+    environment: sandbox
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::975050268859:role/nakomis-nakom-admin-github-ci-sandbox
+          aws-region: eu-west-2
+      - name: CDK deploy (sandbox)
+        run: npm run ci-deploy-sandbox
+
+  deploy-web-sandbox:
+    name: Deploy web (sandbox)
+    runs-on: ubuntu-latest
+    needs: [deploy-infra-sandbox]
+    if: |
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.deploy-infra-sandbox.result == 'success'
+    environment: sandbox
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::975050268859:role/nakomis-nakom-admin-github-ci-sandbox
+          aws-region: eu-west-2
+      - name: Generate config.json from SSM
+        working-directory: web
+        run: bash scripts/set-config.sh
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+      - name: Build
+        working-directory: web
+        run: npm run build
+      - name: Sync to S3
+        run: |
+          BUCKET=$(aws ssm get-parameter --name '/nakom-admin/web/bucket-name' --query Parameter.Value --output text)
+          aws s3 sync web/dist/ s3://$BUCKET/ --delete
+      - name: Invalidate CloudFront
+        run: |
+          DIST_ID=$(aws ssm get-parameter --name '/nakom-admin/web/distribution-id' --query Parameter.Value --output text)
+          aws cloudfront create-invalidation --distribution-id $DIST_ID --paths '/*'
+
+  # ── Deploy: prod (push to main, manual approval via GitHub environment) ────────
+  deploy-infra-prod:
+    name: Deploy infra (prod)
+    runs-on: ubuntu-latest
+    needs: [deploy-infra-sandbox, deploy-web-sandbox]
+    if: |
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.deploy-infra-sandbox.result == 'success' &&
+      needs.deploy-web-sandbox.result == 'success'
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::637423226886:role/nakomis-nakom-admin-github-ci-prod
+          aws-region: eu-west-2
+      - name: CDK deploy (prod)
+        run: npm run ci-deploy-prod
+
+  deploy-web-prod:
+    name: Deploy web (prod)
+    runs-on: ubuntu-latest
+    needs: [deploy-infra-prod]
+    if: |
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.deploy-infra-prod.result == 'success'
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::637423226886:role/nakomis-nakom-admin-github-ci-prod
+          aws-region: eu-west-2
+      - name: Generate config.json from SSM
+        working-directory: web
+        run: bash scripts/set-config.sh
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+      - name: Build
+        working-directory: web
+        run: npm run build
+      - name: Sync to S3
+        run: |
+          BUCKET=$(aws ssm get-parameter --name '/nakom-admin/web/bucket-name' --query Parameter.Value --output text)
+          aws s3 sync web/dist/ s3://$BUCKET/ --delete
+      - name: Invalidate CloudFront
+        run: |
+          DIST_ID=$(aws ssm get-parameter --name '/nakom-admin/web/distribution-id' --query Parameter.Value --output text)
+          aws cloudfront create-invalidation --distribution-id $DIST_ID --paths '/*'
+
   # ── CI Status gate (always runs, allows skipped jobs) ─────────────────────────
   ci-status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [infra, synth-infra, web]
+    needs: [infra, synth-infra-sandbox, web, deploy-infra-sandbox, deploy-web-sandbox, deploy-infra-prod, deploy-web-prod]
     if: always()
     steps:
       - name: Check CI results
         run: |
           if [[ "${{ needs.infra.result }}" == "failure" ]] || \
-             [[ "${{ needs.synth-infra.result }}" == "failure" ]] || \
-             [[ "${{ needs.web.result }}" == "failure" ]]; then
+             [[ "${{ needs.synth-infra-sandbox.result }}" == "failure" ]] || \
+             [[ "${{ needs.web.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-infra-sandbox.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-web-sandbox.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-infra-prod.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-web-prod.result }}" == "failure" ]]; then
             echo "❌ CI checks failed"
             exit 1
           fi

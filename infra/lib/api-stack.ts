@@ -13,8 +13,10 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import { Construct } from 'constructs';
 import { CognitoStack } from './cognito-stack';
 import { AnalyticsStack } from './analytics-stack';
+import { DeployEnv, getEnvConfig } from './env-config';
 
 export interface ApiStackProps extends cdk.StackProps {
+    deployEnv: DeployEnv;
     cognitoStack: CognitoStack;
     analyticsStack: AnalyticsStack;
 }
@@ -26,12 +28,13 @@ export class ApiStack extends cdk.Stack {
         super(scope, id, props);
 
         const { cognitoStack, analyticsStack } = props;
+        const config = getEnvConfig(props.deployEnv);
 
         // --- HTTP API ---
         this.api = new apigwv2.HttpApi(this, 'AdminApi', {
             apiName: 'nakom-admin-api',
             corsPreflight: {
-                allowOrigins: ['https://admin.nakom.is', 'http://localhost:5173'],
+                allowOrigins: [`https://${config.domainName}`, 'http://localhost:5173'],
                 allowMethods: [
                     apigwv2.CorsHttpMethod.GET,
                     apigwv2.CorsHttpMethod.POST,
@@ -306,18 +309,18 @@ export class ApiStack extends cdk.Stack {
         addRoute(apigwv2.HttpMethod.POST, '/blocklist', blocklist);
         addRoute(apigwv2.HttpMethod.DELETE, '/blocklist/{ip}', blocklist);
 
-        // --- Custom Domain: api.admin.nakom.is ---
-        const zone = route53.HostedZone.fromLookup(this, 'NakomIsZone', {
-            domainName: 'nakom.is',
+        // --- Custom Domain ---
+        const zone = route53.HostedZone.fromLookup(this, 'Zone', {
+            domainName: config.zoneName,
         });
 
         const apiCert = new acm.Certificate(this, 'ApiCert', {
-            domainName: 'api.admin.nakom.is',
+            domainName: config.apiDomainName,
             validation: acm.CertificateValidation.fromDns(zone),
         });
 
         const customDomain = new apigwv2.DomainName(this, 'ApiCustomDomain', {
-            domainName: 'api.admin.nakom.is',
+            domainName: config.apiDomainName,
             certificate: apiCert,
         });
 

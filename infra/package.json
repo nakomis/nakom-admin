@@ -3,10 +3,15 @@
   "version": "1.0.0",
   "scripts": {
     "build": "tsc",
-    "synth": "cdk synth",
-    "deploy": "cdk deploy",
     "test": "jest --passWithNoTests",
-    "ci-synth": "cdk synth --output cdk-synth.out"
+    "synth-sandbox": "NPM_ENVIRONMENT=sandbox cdk synth --profile nakom.is-sandbox --all",
+    "synth-prod": "NPM_ENVIRONMENT=prod cdk synth --profile nakom.is-admin --all",
+    "deploy-sandbox": "NPM_ENVIRONMENT=sandbox cdk deploy --profile nakom.is-sandbox --all --require-approval never",
+    "deploy-prod": "NPM_ENVIRONMENT=prod cdk deploy --profile nakom.is-admin --all --require-approval never",
+    "destroy-sandbox": "NPM_ENVIRONMENT=sandbox cdk destroy --profile nakom.is-sandbox --all",
+    "ci-synth-sandbox": "NPM_ENVIRONMENT=sandbox cdk synth --all --output cdk-synth.out",
+    "ci-deploy-sandbox": "NPM_ENVIRONMENT=sandbox cdk deploy --all --require-approval never --output cdk-deploy.out",
+    "ci-deploy-prod": "NPM_ENVIRONMENT=prod cdk deploy --all --require-approval never --output cdk-deploy.out"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.998.0",
