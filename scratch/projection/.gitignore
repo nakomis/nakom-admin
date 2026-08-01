@@ -1,0 +1,8 @@
+# Generated artefacts — regenerable in ~2 minutes, not worth versioning
+*.json
+*.npy
+*.log
+
+# Local venv
+.venv/
+__pycache__/

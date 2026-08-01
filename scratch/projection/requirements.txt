@@ -1,0 +1,5 @@
+# Python 3.11 (asdf). numba/umap-learn wheels are reliable there; 3.13 is not.
+numpy
+scikit-learn
+umap-learn
+psycopg[binary]
