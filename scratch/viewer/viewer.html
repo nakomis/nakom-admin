@@ -203,7 +203,7 @@ void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
   // Perspective-correct sizing, clamped so distant points stay visible and
   // near ones do not become blobs.
-  gl_PointSize = clamp(uSize / max(gl_Position.w, 0.001), 1.5, 9.0);
+  gl_PointSize = clamp(uSize / max(gl_Position.w, 0.001), 2.0, 14.0);
   vColor = aColor;
   vVisible = aVisible;
 }`;
@@ -212,13 +212,34 @@ const FRAG = `
 precision mediump float;
 varying vec3 vColor;
 varying float vVisible;
+
+// Sphere imposter: the geometry is still a flat point, but the normal is
+// reconstructed as though the disc were a sphere and then lit. A real sphere
+// mesh would mean 35,000 instanced draws; this costs one extra sqrt per
+// fragment and reads as a lit ball rather than a sticker.
 void main() {
   if (vVisible < 0.5) discard;
-  // Round points with a soft edge; square points read as noise at this density.
-  vec2 d = gl_PointCoord - vec2(0.5);
-  float r = dot(d, d);
-  if (r > 0.25) discard;
-  gl_FragColor = vec4(vColor, 1.0 - smoothstep(0.16, 0.25, r));
+
+  vec2 d = gl_PointCoord * 2.0 - 1.0;   // -1..1 across the point
+  float r2 = dot(d, d);
+  if (r2 > 1.0) discard;                // outside the sphere's silhouette
+
+  // z on the unit sphere; y flipped because gl_PointCoord runs top-down.
+  vec3 N = vec3(d.x, -d.y, sqrt(1.0 - r2));
+  vec3 L = normalize(vec3(-0.35, 0.55, 0.75));
+
+  float diff = max(dot(N, L), 0.0);
+  float spec = pow(max(dot(reflect(-L, N), vec3(0.0, 0.0, 1.0)), 0.0), 28.0);
+  // Rim term: a touch of brightness at the silhouette separates overlapping
+  // spheres from each other, which matters a lot in the dense clusters.
+  float rim  = pow(1.0 - N.z, 2.5) * 0.30;
+
+  vec3 col = vColor * (0.28 + 0.72 * diff) + vec3(spec * 0.45 + rim);
+
+  // Antialias the silhouette only in the last few percent of the radius, so
+  // the sphere stays solid and depth-testable rather than half-transparent.
+  float alpha = 1.0 - smoothstep(0.92, 1.0, r2);
+  gl_FragColor = vec4(col, alpha);
 }`;
 
 function compile(gl, type, src) {
@@ -351,6 +372,8 @@ function draw() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   if (!current) return;
 
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
@@ -362,7 +385,7 @@ function draw() {
   const view = lookAt(eye, cam.target, [0, 1, 0]);
   const proj = perspective(Math.PI / 4, w / h, cam.dist * 0.01, cam.dist * 10);
   gl.uniformMatrix4fv(loc.mvp, false, mul(proj, view));
-  gl.uniform1f(loc.size, 340 * dpr);
+  gl.uniform1f(loc.size, 420 * dpr);
 
   for (const [l, b, size] of [[loc.pos, buf.pos, 3], [loc.color, buf.color, 3], [loc.visible, buf.visible, 1]]) {
     gl.bindBuffer(gl.ARRAY_BUFFER, b);
