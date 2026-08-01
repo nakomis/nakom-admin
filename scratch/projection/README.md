@@ -137,6 +137,27 @@ Full numbers and context are on the Taiga stories; the headlines:
   6.6 × 10⁻⁵, storage halved.
 - `min_cluster_size` should scale with N. At 20 on Martin-only, 342 clusters and
   no blob; at 100 on the full corpus, two blobs holding 67%.
+- **`max_cluster_size` beats `cluster_selection_method='leaf'`**, which is the
+  documented remedy for one giant cluster and was expected to win. On 45,183
+  martin+claude points, scoring by share of points in a cluster of 15–2000:
+
+  | config | clusters | noise | largest | % useful |
+  |---|---|---|---|---|
+  | `eom mcs=20` | 240 | 25.3% | 16,959 | 37.1% |
+  | `leaf mcs=20` | 334 | 59.2% | 318 | 40.8% |
+  | **`eom mcs=20 max=2000`** | 294 | 50.6% | **1,011** | **49.4%** |
+
+  The blob is not a property of the corpus. Excess-of-mass selection keeps the
+  *most stable* clusters, and a broad featureless region is stable precisely
+  because it has no internal structure to split along. Capping the size forces
+  HDBSCAN further down the condensed tree. Noise roughly doubles, honestly:
+  those points do not become good clusters, they become scatter, which is what
+  they always were.
+- **Do not read a low cluster count as a fact about the data.** The `claude`
+  projection produced 3 clusters over 23,412 messages, which was written up as
+  a finding — that Claude's own messages are semantically homogeneous. It was
+  the same eom artefact; under the cap it is 106 clusters and nothing about the
+  messages changed.
 - **int8 quantisation of embeddings is free; PCA is where the loss is.** At every
   dimension, float32 and int8 score identically, so a wider dtype buys nothing.
 - **Recall@k is the wrong metric for these vectors.** The *uncompressed*

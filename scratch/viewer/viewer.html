@@ -38,6 +38,7 @@
     color: #8b949e; font-size: 11px; }
   .stats b { color: #c9d1d9; font-weight: 600; font-variant-numeric: tabular-nums; }
   .sel { color: #7fb3f0; margin-top: 6px; }
+  .terms { color: #6e7681; font-size: 10px; margin-top: 3px; line-height: 1.5; }
   .row { display: flex; justify-content: space-between; font-size: 11px;
     color: #8b949e; margin: 2px 0 2px; }
   .row b { color: #c9d1d9; font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -87,6 +88,7 @@
     <div><b id="s-nodes">0</b> points · <b id="s-clusters">0</b> clusters</div>
     <div id="s-dropped"></div>
     <div id="s-selected" class="sel"></div>
+    <div id="s-terms" class="terms"></div>
   </div>
   <div class="warn" id="warn" hidden></div>
 </div>
@@ -890,6 +892,17 @@ function applySelection() {
       : `${name} — ${(c ? c.size : 0).toLocaleString()}`
         + ` points, ${(lineCount / 2).toLocaleString()} links`;
   }
+
+  // The terms the label was derived from, shown whenever a cluster is
+  // selected. When labels come from --ollama the name is a language model's
+  // paraphrase of these, and a paraphrase can drift: "great, nah, mornin"
+  // came back as "Software Development Morning Routine", which sounds far more
+  // purposeful than a cluster of casual replies actually is. Keeping the terms
+  // on screen means the readable name never replaces the evidence for it, and
+  // a viewer can see for themselves when the two disagree.
+  const te = document.getElementById("s-terms");
+  const sc = selected === null ? null : p.meta.clusters.find((x) => x.id === selected);
+  te.textContent = sc && sc.terms ? sc.terms.join(" · ") : "";
   draw();
 }
 
