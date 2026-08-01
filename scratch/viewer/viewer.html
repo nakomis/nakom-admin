@@ -39,6 +39,18 @@
   .stats b { color: #c9d1d9; font-weight: 600; font-variant-numeric: tabular-nums; }
   .sel { color: #7fb3f0; margin-top: 6px; }
   .warn { color: #d29922; font-size: 11px; margin-top: 8px; line-height: 1.4; }
+  /* Cluster names are DOM, not WebGL. Text in a point cloud needs a font
+     atlas, per-glyph quads and a shader that fights the depth buffer; an
+     absolutely-positioned div needs a projected centroid and nothing else,
+     and it stays crisp at every zoom because it is never rasterised into a
+     texture. pointer-events stay off so labels never intercept a click meant
+     for the sphere underneath. */
+  #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  #labels div { position: absolute; transform: translate(-50%, -50%);
+    white-space: nowrap; font-size: 11px; letter-spacing: .01em;
+    color: #c9d1d9; text-shadow: 0 0 4px #0b0d11, 0 0 8px #0b0d11; }
+  #labels div.sel { color: #ffe27a; font-size: 12px; font-weight: 600; }
+
   #hint { position: fixed; bottom: 14px; left: 16px; color: #4b535e; font-size: 11px; }
   #err { position: fixed; inset: 0; display: none; place-items: center;
     padding: 40px; text-align: center; color: #f85149; }
@@ -65,6 +77,7 @@
   <div class="warn" id="warn" hidden></div>
 </div>
 
+<div id="labels"></div>
 <div id="hint">drag to rotate · scroll to zoom · shift-drag to pan · click a point to show its cluster's links</div>
 <div id="err"></div>
 
@@ -310,12 +323,10 @@ void main() {
   // marginal one as a hint. Drawing them all at equal weight would assert
   // that every link above the floor is equivalent, which is the thing the
   // old d3 graph got right by varying link distance.
-  // Strength is a real cosine, and the edge floor is 0.55 — so the useful
-  // range is roughly 0.55..1.0, not 0..1. Rebasing on that spread keeps the
-  // weakest surviving link faint without making it invisible, and still lets
-  // a near-duplicate pair stand out.
-  float t = clamp((vStrength - 0.55) / 0.45, 0.0, 1.0);
-  gl_FragColor = vec4(0.62, 0.74, 0.92, 0.30 + t * 0.55);
+  // Strength arrives already rebased out of the edge floor by pack.py, so it
+  // spans most of 0..1 and is used directly — rescaling again here would flatten
+  // the weaker half of the range to a single opacity.
+  gl_FragColor = vec4(0.62, 0.74, 0.92, 0.30 + vStrength * 0.55);
 }`;
 
 function compile(gl, type, src) {
@@ -424,6 +435,7 @@ function load() {
 
   current = p;
   cam.dist = p.radius * 2.4;
+  computeCentroids();
 
   const total = shown.martin + shown.claude + shown.tool;
   document.getElementById("s-nodes").textContent = total.toLocaleString();
@@ -447,6 +459,107 @@ function load() {
     warn.textContent = "No projection for this combination — showing the "
       + "all-messages layout, filtered. Positions reflect the full corpus.";
   }
+}
+
+/** Cluster centroids, computed once per projection. */
+let centroids = null;
+
+function computeCentroids() {
+  const p = current;
+  const acc = new Map();
+  for (let i = 0; i < p.n; i++) {
+    const c = p.cluster[i];
+    let a = acc.get(c);
+    if (!a) acc.set(c, a = [0, 0, 0, 0]);
+    a[0] += p.pos[i*3]; a[1] += p.pos[i*3+1]; a[2] += p.pos[i*3+2]; a[3]++;
+  }
+  centroids = new Map();
+  for (const [c, a] of acc) centroids.set(c, [a[0]/a[3], a[1]/a[3], a[2]/a[3]]);
+}
+
+/**
+ * Position the cluster-name overlay.
+ *
+ * Only the largest clusters are named, plus the selected one whatever its
+ * size. Labelling all 234 would produce a wall of overlapping text that hides
+ * the very structure the labels exist to explain — and past a couple of dozen
+ * names nobody reads them anyway.
+ *
+ * Cheap occlusion culling only: a label behind the camera is dropped, and one
+ * outside the viewport is skipped. Testing whether a name is buried inside the
+ * cloud would need a depth read back from the GPU every frame, which is a
+ * stall, for a label that the text-shadow already keeps legible.
+ */
+// A generous candidate pool, not a display count — collision rejection below
+// is what decides how many actually appear. Keeping the pool large is what
+// makes zooming in progressively reveal smaller topics as the centroids
+// separate, rather than showing the same fixed 20 names at every scale.
+const MAX_LABELS = 80;
+
+function drawLabels(mvp) {
+  const host = document.getElementById("labels");
+  const p = current;
+  if (!p || !centroids) { host.innerHTML = ""; return; }
+
+  const ranked = p.meta.clusters
+    .filter((c) => c.label && centroids.has(c.id))
+    .sort((a, b) => b.size - a.size)
+    .slice(0, MAX_LABELS);
+  if (selected !== null && !ranked.some((c) => c.id === selected)) {
+    const s = p.meta.clusters.find((c) => c.id === selected);
+    if (s && s.label && centroids.has(s.id)) ranked.push(s);
+  }
+
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const out = [];
+  // Greedy screen-space collision rejection. Clusters are already ordered
+  // largest-first, so the biggest topic wins contested space and smaller ones
+  // yield — which is the right precedence, and it means the surviving labels
+  // change as you zoom in and the centroids spread apart. Without this the
+  // dense middle of the map is an unreadable pile of overlapping text, which
+  // hides exactly the structure the labels are there to explain.
+  const placed = [];
+  // Distinct clusters can share a label: c-TF-IDF names a cluster by its most
+  // distinguishing terms, and several small clusters of shell transcripts all
+  // distinguish themselves the same way. Showing "completed, bash" three times
+  // reads as a rendering bug rather than as three genuinely separate regions,
+  // so only the largest keeps the name.
+  const named = new Set();
+  for (const c of ranked) {
+    if (named.has(c.label) && c.id !== selected) continue;
+    const [x, y, z] = centroids.get(c.id);
+    const cw = mvp[3]*x + mvp[7]*y + mvp[11]*z + mvp[15];
+    if (cw <= 0) continue;
+    const sx = ((mvp[0]*x + mvp[4]*y + mvp[8]*z  + mvp[12]) / cw * 0.5 + 0.5) * w;
+    const sy = (1 - ((mvp[1]*x + mvp[5]*y + mvp[9]*z + mvp[13]) / cw * 0.5 + 0.5)) * h;
+    if (sx < -80 || sy < -20 || sx > w + 80 || sy > h + 20) continue;
+
+    // Width estimated from character count rather than measured: measuring
+    // means inserting each candidate and reading offsetWidth, which forces a
+    // synchronous layout per label per frame. 5.9px/char is close enough for
+    // 11px system sans, and the cost of being slightly wrong is a little extra
+    // whitespace, not a collision.
+    const halfW = c.label.length * 2.95 + 6, halfH = 9;
+    const hit = placed.some((q) =>
+      Math.abs(q.x - sx) < q.halfW + halfW && Math.abs(q.y - sy) < q.halfH + halfH);
+    // The selection is always drawn: it is the thing the viewer just asked
+    // about, so it outranks any size ordering.
+    if (hit && c.id !== selected) continue;
+    placed.push({ x: sx, y: sy, halfW, halfH });
+    named.add(c.label);
+    // Not innerHTML per label — the text is c-TF-IDF output derived from
+    // message bodies, so it is corpus data and must not be parsed as markup.
+    const div = document.createElement("div");
+    if (c.id === selected) div.className = "sel";
+    div.style.left = sx + "px";
+    div.style.top = sy + "px";
+    div.textContent = c.label;
+    // Fade a label out when its cluster is not the selected one, matching the
+    // dimming the spheres already get, so the selected name stands alone.
+    div.style.opacity = (selected === null || c.id === selected) ? "0.92" : "0.28";
+    out.push(div);
+  }
+  host.replaceChildren(...out);
 }
 
 /**
@@ -540,8 +653,9 @@ function applySelection() {
     el.textContent = "";
   } else {
     frameCluster(selected);
-    const size = p.meta.clusters.find((c) => c.id === selected);
-    el.textContent = `cluster ${selected} — ${(size ? size.size : 0).toLocaleString()}`
+    const c = p.meta.clusters.find((x) => x.id === selected);
+    el.textContent = (c && c.label ? c.label : `cluster ${selected}`)
+      + ` — ${(c ? c.size : 0).toLocaleString()}`
       + ` points, ${(lineCount / 2).toLocaleString()} links`;
   }
   draw();
@@ -637,6 +751,8 @@ function draw() {
     gl.disableVertexAttribArray(lineLoc.pos);
     gl.disableVertexAttribArray(lineLoc.strength);
   }
+
+  drawLabels(mvp);
 }
 
 // ── interaction ────────────────────────────────────────────────────────────

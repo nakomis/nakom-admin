@@ -85,7 +85,8 @@ def pack(doc):
         "edges": base64.b64encode(bytes(ebuf)).decode(),
         "n_edges": len(ebuf) // 5,
         "clusters": [
-            {"id": int(k), "size": v.get("size", 0), "label": v.get("label")}
+            {"id": int(k), "size": v.get("size", 0), "label": v.get("label"),
+             "terms": v.get("terms")}
             for k, v in sorted(clusters.items())
         ],
     }
