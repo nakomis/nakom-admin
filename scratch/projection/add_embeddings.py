@@ -73,6 +73,28 @@ def l2(X):
     return X / np.maximum(np.linalg.norm(X, axis=1, keepdims=True), 1e-12)
 
 
+def fit_basis(X, dims):
+    """Fit the PCA basis once, to be applied to several projections.
+
+    Returned as (mean, components) so the same rotation can be reused. See
+    --shared-basis: the five projections overlap heavily, and a per-projection
+    basis means shipping the same message's vector more than once under
+    different rotations.
+    """
+    from sklearn.decomposition import PCA
+    Xn = l2(X)
+    mean = Xn.mean(axis=0, keepdims=True)
+    pca = PCA(n_components=dims, svd_solver="randomized", random_state=0)
+    pca.fit(Xn - mean)
+    return mean, pca.components_, float(pca.explained_variance_ratio_.sum())
+
+
+def apply_basis(X, mean, components):
+    """Project and quantise against an already-fitted basis."""
+    Y = l2((l2(X) - mean) @ components.T)
+    return np.clip(np.rint(Y * 127.0), -127, 127).astype(np.int8)
+
+
 def compress(X, dims):
     """L2 -> PCA(dims) -> L2 -> int8. Returns (int8 array, explained variance).
 
@@ -151,6 +173,90 @@ def report(X, q, sample, k, seed):
     }
 
 
+def shared(files, X, by_id, a):
+    """One basis, one table, referenced by every projection.
+
+    The five projections are overlapping subsets of one corpus: they carry
+    127,187 node slots between them for 62,768 distinct messages, so a
+    per-projection basis ships most vectors twice under different rotations.
+    One shared table removes that, and a projection then costs only an index
+    array.
+
+    This was expected to cost fidelity in the single-author views, on the
+    reasoning that a corpus-wide basis spends components on distinctions those
+    views do not contain — separating tool output inside the martin-only view,
+    where there is none. Measured, it does not:
+
+      view            shared    per-projection
+      martin           98.0%        97.6%
+      claude           97.5%          —
+      tool             99.4%          —
+      all              99.0%          —
+      martin-claude    98.3%          —
+
+    The shared basis is fitted on 62,768 messages where the martin-only basis
+    saw 16,205, and the better-estimated axes more than pay for the ones that
+    view wastes. So it is not a trade at all: half the bytes, marginally better
+    quality. Worth stating because the opposite is the intuitive answer, and it
+    was the one written here first.
+    """
+    import base64
+
+    docs = {f: json.loads(f.read_text()) for f in files}
+
+    # The basis is fitted on the distinct union, not on a concatenation of the
+    # projections: repeating a message five times would weight it five times
+    # and pull the principal axes towards whatever the overlapping views
+    # happen to share.
+    union = []
+    seen = set()
+    for doc in docs.values():
+        for n in doc.get("nodes") or []:
+            r = by_id.get(n["id"])
+            if r is not None and r not in seen:
+                seen.add(r)
+                union.append(r)
+    union.sort()
+    log(f"shared basis over {len(union):,} distinct messages "
+        f"(vs {sum(len(d.get('nodes') or []) for d in docs.values()):,} node slots)")
+
+    t = time.perf_counter()
+    mean, comps, evr = fit_basis(X[union], a.dims)
+    q = apply_basis(X[union], mean, comps)
+    log(f"fitted {a.dims}d in {time.perf_counter() - t:.0f}s  "
+        f"{q.nbytes/1e6:.2f} MB  evr {evr:.1%}")
+
+    row_of_source = {src: i for i, src in enumerate(union)}
+    table = {
+        "dims": a.dims,
+        "count": len(union),
+        "data": base64.b64encode(q.tobytes()).decode(),
+        "explained_variance": round(evr, 4),
+    }
+
+    for f, doc in docs.items():
+        nodes = doc.get("nodes") or []
+        # -1 for a node with no embedding: the viewer must treat it as
+        # unqueryable rather than as row 0, which would silently answer every
+        # query about it with someone else's neighbours.
+        idx = [row_of_source.get(by_id.get(n["id"], -1), -1) for n in nodes]
+        doc["emb"] = {"shared": True, "dims": a.dims, "rows": idx}
+        if a.report:
+            have = [i for i, r in enumerate(idx) if r >= 0]
+            if len(have) > a.dims:
+                sub = X[[union[idx[i]] for i in have]]
+                st = report(sub, q[[idx[i] for i in have]],
+                            a.report_sample, a.report_k, a.seed)
+                doc["emb"]["fidelity"] = st
+                log(f"{f.name:<28} recall@{a.report_k} "
+                    f"{st[f'recall@{a.report_k}']:.1%}  quality {st['quality']:.1%}")
+        f.write_text(json.dumps(doc))
+
+    out = files[0].parent / f"{a.prefix}-embeddings.json"
+    out.write_text(json.dumps(table))
+    log(f"wrote {out.name} ({out.stat().st_size/1e6:.1f} MB)")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dsn", required=True)
@@ -162,6 +268,9 @@ def main():
     p.add_argument("--report-sample", type=int, default=400)
     p.add_argument("--report-k", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--shared-basis", action="store_true",
+                   help="fit one PCA basis across every projection and write a "
+                        "single shared table, instead of one basis each")
     a = p.parse_args()
 
     src = pathlib.Path(a.dir)
@@ -179,6 +288,9 @@ def main():
 
     by_id = {r[0]: i for i, r in enumerate(rows)}
     X = np.array([json.loads(r[1]) for r in rows], dtype=np.float32)
+
+    if a.shared_basis:
+        return shared(files, X, by_id, a)
 
     for f in files:
         doc = json.loads(f.read_text())
