@@ -80,15 +80,20 @@ def pack(doc):
     # as a zero vector, which would sit equidistant from everything and quietly
     # contaminate every neighbour list.
     emb = doc.get("emb")
+    if emb and emb.get("shared"):
+        # Shared basis: the vectors live in one table beside the projections,
+        # and this carries only the row each node maps to.
+        emb_out = {"shared": True, "dims": emb["dims"], "rows": emb["rows"],
+                   "quality": (emb.get("fidelity") or {}).get("quality")}
+    elif emb:
+        emb_out = {"dims": emb["dims"], "data": emb["data"], "idx": emb["idx"],
+                   "quality": (emb.get("fidelity") or {}).get("quality")}
+    else:
+        emb_out = None
 
     clusters = {c["id"]: c for c in doc.get("clusters", [])}
     return {
-        "emb": {
-            "dims": emb["dims"],
-            "data": emb["data"],
-            "idx": emb["idx"],
-            "quality": (emb.get("fidelity") or {}).get("quality"),
-        } if emb else None,
+        "emb": emb_out,
         "name": doc["name"],
         "authors": doc.get("authors", []),
         "total": doc.get("total", len(nodes)),
@@ -127,6 +132,13 @@ def main():
     if not packed:
         sys.exit("no projections found")
 
+    shared_f = src / "projv2-embeddings.json"
+    shared = json.loads(shared_f.read_text()) if shared_f.exists() else None
+    bundle = {"projections": packed, "shared_emb": shared}
+    if shared:
+        print(f"  {'shared emb':<14} {shared['count']:>7,} vecs  "
+              f"{shared['dims']}d  {len(shared['data'])/1e6:>5.2f} MB b64")
+
     # Assembled rather than written literally, so that this line does not
     # itself count as an occurrence of the token.
     token = "/*__" + "DATA__*/{}"
@@ -138,7 +150,7 @@ def main():
     seen = template.count(token)
     if seen != 1:
         sys.exit(f"viewer.html must contain the data placeholder exactly once, found {seen}")
-    html = template.replace(token, json.dumps(packed, separators=(",", ":")))
+    html = template.replace(token, json.dumps(bundle, separators=(",", ":")))
     out.write_text(html)
     print(f"\nwrote {out} ({out.stat().st_size/1e6:.1f} MB)")
 

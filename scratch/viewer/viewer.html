@@ -107,7 +107,13 @@
 // str.replace substituted there too: the bundle inlined 26 MB of embeddings
 // twice and came out at 53 MB. pack.py now refuses to run unless the token
 // appears exactly once.
-const PROJECTIONS = /*__DATA__*/{};
+const BUNDLE = /*__DATA__*/{};
+
+// Projections keyed by author combination, plus — when add_embeddings.py was
+// run with --shared-basis — one embedding table they all index into, rather
+// than a private copy each.
+const PROJECTIONS = BUNDLE.projections || BUNDLE;
+const SHARED_EMB = BUNDLE.shared_emb || null;
 
 // ---------------------------------------------------------------------------
 // Data
@@ -517,13 +523,53 @@ function load() {
  */
 let emb = null;
 
+/** Decoded shared table, built once and reused across projection switches. */
+let sharedTable = null;
+
+function decodeTable(data) {
+  const raw = atob(data);
+  const q = new Int8Array(raw.length);
+  // charCodeAt gives 0..255; the shift pair reinterprets it as signed, which
+  // is what the packed int8 actually means.
+  for (let i = 0; i < raw.length; i++) q[i] = (raw.charCodeAt(i) << 24) >> 24;
+  return q;
+}
+
+function rowNorms(q, dims, rows) {
+  const norm = new Float32Array(rows);
+  for (let r = 0; r < rows; r++) {
+    let s = 0;
+    for (let d = 0; d < dims; d++) { const v = q[r*dims + d]; s += v * v; }
+    norm[r] = Math.sqrt(s) || 1;
+  }
+  return norm;
+}
+
 function loadEmbeddings(meta) {
   emb = null;
   if (!meta || !meta.emb) return;
+
+  // Shared table: every projection indexes one decoded copy. Decoding it per
+  // switch would cost ~10 MB of allocation and a full pass each time the
+  // author checkboxes change.
+  if (meta.emb.shared) {
+    if (!SHARED_EMB) return;
+    if (!sharedTable) {
+      const q = decodeTable(SHARED_EMB.data);
+      sharedTable = { dims: SHARED_EMB.dims, q,
+                      norm: rowNorms(q, SHARED_EMB.dims, SHARED_EMB.count) };
+    }
+    const rows = meta.emb.rows;
+    const rowOf = new Int32Array(current.n);
+    for (let i = 0; i < current.n; i++) rowOf[i] = rows[i] === undefined ? -1 : rows[i];
+    emb = { dims: sharedTable.dims, q: sharedTable.q, rowOf,
+            norm: sharedTable.norm, n: SHARED_EMB.count,
+            quality: (meta.emb.fidelity || {}).quality || null };
+    return;
+  }
+
   const { dims, data, idx } = meta.emb;
-  const raw = atob(data);
-  const q = new Int8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) q[i] = (raw.charCodeAt(i) << 24) >> 24;
+  const q = decodeTable(data);
 
   // rowOf maps node index -> row, or -1. Int32Array rather than a Map: it is
   // read once per node in the inner loop of every query, and a Map lookup
