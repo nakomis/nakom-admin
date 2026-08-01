@@ -58,11 +58,61 @@ TOOL_RE = re.compile(
 
 
 def classify(role, content):
+    """Regex fallback. Only used when author_clf.joblib is absent.
+
+    92.6% precision but 21.8% recall — it finds a fifth of tool output. Kept
+    so the script still runs standalone, not because it is good enough.
+    """
     if role == "assistant":
         return "claude"
     if len(content) < 12 or TOOL_RE.search(content):
         return "tool"
     return "martin"
+
+
+def classify_all(rows, X, martin_threshold):
+    """Classifier if available, regex otherwise.
+
+    `role='assistant'` is authoritative for Claude — no model needed. The only
+    hard call is tool-vs-martin *within* role='user', which is what the
+    classifier was trained on.
+
+    The threshold trades recall for precision on the martin bucket. At 0.5:
+    93% recall, 71% precision. At 0.8: 72% recall, 92% precision. For a view
+    labelled "messages I wrote", a clean bucket matters more than a complete
+    one — a quarter of Martin's messages missing is invisible, while a third
+    of the bucket being command output is not.
+    """
+    try:
+        import joblib
+        clf = joblib.load("author_clf.joblib")
+    except Exception as e:
+        log(f"no classifier ({e}) — falling back to regex, 21.8% recall")
+        return np.array([classify(r[1], r[2]) for r in rows])
+
+    authors = np.empty(len(rows), dtype=object)
+    is_user = np.array([r[1] == "user" for r in rows])
+    authors[~is_user] = "claude"
+
+    mi = list(clf.classes_).index("martin")
+    Xn = X[is_user] / np.maximum(
+        np.linalg.norm(X[is_user], axis=1, keepdims=True), 1e-12)
+    prob = clf.predict_proba(Xn)[:, mi]
+
+    # Deliberately NOT unioned with TOOL_RE, though it looks like it should be.
+    # Measured on held-out ground truth at t=0.8, the union moves martin
+    # precision 92.5% -> 94.0% but recall 70.0% -> 62.0%; balanced accuracy
+    # falls 84.5% -> 80.7%.
+    #
+    # The reason is a base-rate trap. TOOL_RE's 92.6% precision was measured on
+    # the whole user-role population, which is ~86% tool. Applied to the subset
+    # the classifier already believes is Martin — ~92% Martin — its positives
+    # are mostly Martin deliberately pasting JSON, commit output or config,
+    # which he does constantly. Precision does not transfer across populations.
+    authors[np.flatnonzero(is_user)] = np.where(
+        prob >= martin_threshold, "martin", "tool")
+    log(f"classifier: threshold={martin_threshold} on {is_user.sum():,} user-role rows")
+    return authors
 
 
 def project(X, seed, min_cluster_size, pca_dims):
@@ -92,6 +142,10 @@ def main():
     p.add_argument("--pca-dims", type=int, default=50)
     p.add_argument("--min-cluster-size", type=int, default=20)
     p.add_argument("--out-prefix", default="proj")
+    p.add_argument("--martin-threshold", type=float, default=0.8,
+                   help="classifier probability above which a user-role "
+                        "message counts as Martin. Higher = cleaner bucket, "
+                        "fewer messages.")
     args = p.parse_args()
 
     t0 = time.perf_counter()
@@ -103,9 +157,9 @@ def main():
         rows = cur.fetchall()
     log(f"fetched {len(rows):,} rows in {time.perf_counter() - t0:.0f}s")
 
-    authors = np.array([classify(r[1], r[2]) for r in rows])
     ids = [r[0] for r in rows]
     X = np.array([json.loads(r[3]) for r in rows], dtype=np.float32)
+    authors = classify_all(rows, X, args.martin_threshold)
 
     counts = {a: int((authors == a).sum()) for a in ("martin", "claude", "tool")}
     log(f"authors: {counts}")
