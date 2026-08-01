@@ -72,8 +72,23 @@ def pack(doc):
         q = int(max(0.0, min(1.0, (sim - 0.5) / 0.5)) * 255)
         ebuf += struct.pack("<HHB", a, b, q)
 
+    # Compressed embeddings, if add_embeddings.py has run. Passed through as
+    # the base64 it already is — it is an int8 matrix, and the browser reads it
+    # straight into an Int8Array with no per-element decode. `idx` maps rows of
+    # that matrix back to node indices, because a node whose message lost its
+    # embedding has no row and must stay unqueryable rather than being treated
+    # as a zero vector, which would sit equidistant from everything and quietly
+    # contaminate every neighbour list.
+    emb = doc.get("emb")
+
     clusters = {c["id"]: c for c in doc.get("clusters", [])}
     return {
+        "emb": {
+            "dims": emb["dims"],
+            "data": emb["data"],
+            "idx": emb["idx"],
+            "quality": (emb.get("fidelity") or {}).get("quality"),
+        } if emb else None,
         "name": doc["name"],
         "authors": doc.get("authors", []),
         "total": doc.get("total", len(nodes)),
@@ -112,9 +127,17 @@ def main():
     if not packed:
         sys.exit("no projections found")
 
-    token = "/*__DATA__*/{}"
-    if token not in template:
-        sys.exit("viewer.html is missing the /*__DATA__*/{} placeholder")
+    # Assembled rather than written literally, so that this line does not
+    # itself count as an occurrence of the token.
+    token = "/*__" + "DATA__*/{}"
+    # Exactly once, not merely present. A second occurrence -- a comment
+    # documenting the token was enough -- makes str.replace inline the whole
+    # payload twice, which is silent: the page still works, because the first
+    # copy lands inside a comment, and the only symptom is a bundle of double
+    # the expected size. That shipped once at 53 MB before anyone noticed.
+    seen = template.count(token)
+    if seen != 1:
+        sys.exit(f"viewer.html must contain the data placeholder exactly once, found {seen}")
     html = template.replace(token, json.dumps(packed, separators=(",", ":")))
     out.write_text(html)
     print(f"\nwrote {out} ({out.stat().st_size/1e6:.1f} MB)")
