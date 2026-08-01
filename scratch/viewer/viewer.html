@@ -480,12 +480,18 @@ function load() {
   document.getElementById("s-nodes").textContent = total.toLocaleString();
   document.getElementById("s-clusters").textContent = seen.size.toLocaleString();
   const dropped = p.meta.total - p.meta.kept;
+  // The scatter count is stated rather than quietly omitted, and it is large —
+  // around half the corpus once clusters are capped in size. That is a result,
+  // not a defect: those messages genuinely sit in no dense region, and the
+  // alternative was HDBSCAN sweeping them into one 16,890-point cluster that
+  // no label described. A map that hides how much it discarded is a map that
+  // overstates how much structure it found.
   document.getElementById("s-dropped").textContent = dropped
-    ? `${dropped.toLocaleString()} unclustered points hidden`
+    ? `${dropped.toLocaleString()} in no cluster (${(dropped / p.meta.total * 100).toFixed(0)}%), not shown`
     : "";
   document.getElementById("s-dropped").title =
-    "Each author combination is projected and clustered independently, so "
-    + "per-author counts differ between views.";
+    "Points HDBSCAN assigned to no cluster. Each author combination is "
+    + "projected and clustered independently, so counts differ between views.";
   for (const a of AUTHOR_NAMES) {
     document.getElementById("n-" + a).textContent = shown[a] ? shown[a].toLocaleString() : "";
   }
