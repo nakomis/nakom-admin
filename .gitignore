@@ -13,3 +13,5 @@ web/dist
 infra/cdk.out
 config.json
 .worktrees
+PLAN.md
+infra/*.out

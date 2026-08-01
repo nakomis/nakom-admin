@@ -57,6 +57,21 @@ def pack(doc):
             0,
         )
 
+    # Intra-cluster edges, packed as uint16 index pairs plus a uint8 similarity.
+    # uint16 is sufficient because no projection exceeds 65,535 nodes; the
+    # similarity is only used for line opacity, so a byte of precision is
+    # generous. 5 bytes an edge against ~30 as JSON.
+    ebuf = bytearray()
+    edges = doc.get("edges") or []
+    for a, b, sim in edges:
+        if a > 65535 or b > 65535:
+            continue
+        # Similarity is bounded below by the edge floor, so rescale from there
+        # rather than from 0 — otherwise every edge lands in the top of the
+        # byte range and the opacity ramp does nothing.
+        q = int(max(0.0, min(1.0, (sim - 0.5) / 0.5)) * 255)
+        ebuf += struct.pack("<HHB", a, b, q)
+
     clusters = {c["id"]: c for c in doc.get("clusters", [])}
     return {
         "name": doc["name"],
@@ -67,6 +82,8 @@ def pack(doc):
         "span": span,
         "n": len(nodes),
         "data": base64.b64encode(bytes(buf)).decode(),
+        "edges": base64.b64encode(bytes(ebuf)).decode(),
+        "n_edges": len(ebuf) // 5,
         "clusters": [
             {"id": int(k), "size": v.get("size", 0), "label": v.get("label")}
             for k, v in sorted(clusters.items())
@@ -88,8 +105,8 @@ def main():
         p = pack(json.loads(f.read_text()))
         if p:
             packed[name] = p
-            print(f"  {name:<14} {p['n']:>7,} nodes  "
-                  f"{len(p['data'])/1e6:>5.2f} MB b64")
+            print(f"  {name:<14} {p['n']:>7,} nodes  {p['n_edges']:>7,} edges  "
+                  f"{(len(p['data']) + len(p['edges']))/1e6:>5.2f} MB b64")
 
     if not packed:
         sys.exit("no projections found")

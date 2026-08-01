@@ -37,6 +37,7 @@
   .stats { border-top: 1px solid #232a35; padding-top: 10px;
     color: #8b949e; font-size: 11px; }
   .stats b { color: #c9d1d9; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sel { color: #7fb3f0; margin-top: 6px; }
   .warn { color: #d29922; font-size: 11px; margin-top: 8px; line-height: 1.4; }
   #hint { position: fixed; bottom: 14px; left: 16px; color: #4b535e; font-size: 11px; }
   #err { position: fixed; inset: 0; display: none; place-items: center;
@@ -59,11 +60,12 @@
   <div class="stats">
     <div><b id="s-nodes">0</b> points · <b id="s-clusters">0</b> clusters</div>
     <div id="s-dropped"></div>
+    <div id="s-selected" class="sel"></div>
   </div>
   <div class="warn" id="warn" hidden></div>
 </div>
 
-<div id="hint">drag to rotate · scroll to zoom · shift-drag to pan</div>
+<div id="hint">drag to rotate · scroll to zoom · shift-drag to pan · click a point to show its cluster's links</div>
 <div id="err"></div>
 
 <script>
@@ -121,7 +123,18 @@ function decode(p) {
   }
   dists.sort();
   const radius = dists[Math.floor(n * 0.98)] || dists[n - 1] || 1;
-  return { pos, cluster, author, n, radius, meta: p };
+
+  // Intra-cluster edges: uint16 index pair + uint8 similarity, 5 bytes each.
+  const ebin = atob(p.edges || "");
+  const ne = (p.n_edges | 0);
+  const ea = new Uint16Array(ne), eb = new Uint16Array(ne), es = new Float32Array(ne);
+  for (let i = 0; i < ne; i++) {
+    const o = i * 5;
+    ea[i] = ebin.charCodeAt(o) | (ebin.charCodeAt(o + 1) << 8);
+    eb[i] = ebin.charCodeAt(o + 2) | (ebin.charCodeAt(o + 3) << 8);
+    es[i] = ebin.charCodeAt(o + 4) / 255;
+  }
+  return { pos, cluster, author, n, radius, meta: p, ea, eb, es, ne };
 }
 
 /**
@@ -279,6 +292,32 @@ void main() {
   gl_FragColor = vec4(col, alpha);
 }`;
 
+const LINE_VERT = `
+attribute vec3 aPos;
+attribute float aStrength;
+uniform mat4 uMVP;
+varying float vStrength;
+void main() {
+  gl_Position = uMVP * vec4(aPos, 1.0);
+  vStrength = aStrength;
+}`;
+
+const LINE_FRAG = `
+precision mediump float;
+varying float vStrength;
+void main() {
+  // Opacity carries similarity: a strong pair reads as a solid line, a
+  // marginal one as a hint. Drawing them all at equal weight would assert
+  // that every link above the floor is equivalent, which is the thing the
+  // old d3 graph got right by varying link distance.
+  // Strength is a real cosine, and the edge floor is 0.55 — so the useful
+  // range is roughly 0.55..1.0, not 0..1. Rebasing on that spread keeps the
+  // weakest surviving link faint without making it invisible, and still lets
+  // a near-duplicate pair stand out.
+  float t = clamp((vStrength - 0.55) / 0.45, 0.0, 1.0);
+  gl_FragColor = vec4(0.62, 0.74, 0.92, 0.30 + t * 0.55);
+}`;
+
 function compile(gl, type, src) {
   const s = gl.createShader(type);
   gl.shaderSource(s, src);
@@ -318,7 +357,23 @@ const loc = {
   mvp: gl.getUniformLocation(prog, "uMVP"),
   size: gl.getUniformLocation(prog, "uSize"),
 };
-const buf = { pos: gl.createBuffer(), color: gl.createBuffer(), visible: gl.createBuffer() };
+const buf = { pos: gl.createBuffer(), color: gl.createBuffer(), visible: gl.createBuffer(),
+              linePos: gl.createBuffer(), lineStr: gl.createBuffer() };
+
+const lineProg = gl.createProgram();
+gl.attachShader(lineProg, compile(gl, gl.VERTEX_SHADER, LINE_VERT));
+gl.attachShader(lineProg, compile(gl, gl.FRAGMENT_SHADER, LINE_FRAG));
+gl.linkProgram(lineProg);
+if (!gl.getProgramParameter(lineProg, gl.LINK_STATUS)) fail(gl.getProgramInfoLog(lineProg));
+const lineLoc = {
+  pos: gl.getAttribLocation(lineProg, "aPos"),
+  strength: gl.getAttribLocation(lineProg, "aStrength"),
+  mvp: gl.getUniformLocation(lineProg, "uMVP"),
+};
+
+/** Currently selected cluster id, or null for the whole view. */
+let selected = null;
+let lineCount = 0;
 
 const cam = { theta: 0.6, phi: 1.15, dist: 3, target: [0, 0, 0] };
 let current = null;
@@ -351,16 +406,11 @@ function load() {
   }
 
   const p = decode(PROJECTIONS[key]);
-  const maxId = p.cluster.length ? Math.max(...p.cluster) : 0;
-  const palette = clusterColours(maxId);
-
-  const colors = new Float32Array(p.n * 3);
   const visible = new Float32Array(p.n);
   const shown = { martin: 0, claude: 0, tool: 0 };
   const seen = new Set();
   for (let i = 0; i < p.n; i++) {
     const c = p.cluster[i];
-    colors[i*3] = palette[c*3]; colors[i*3+1] = palette[c*3+1]; colors[i*3+2] = palette[c*3+2];
     const a = AUTHOR_NAMES[p.author[i]];
     const on = sel.includes(a);
     visible[i] = on ? 1 : 0;
@@ -369,8 +419,6 @@ function load() {
 
   gl.bindBuffer(gl.ARRAY_BUFFER, buf.pos);
   gl.bufferData(gl.ARRAY_BUFFER, p.pos, gl.STATIC_DRAW);
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf.color);
-  gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, buf.visible);
   gl.bufferData(gl.ARRAY_BUFFER, visible, gl.STATIC_DRAW);
 
@@ -390,13 +438,142 @@ function load() {
   for (const a of AUTHOR_NAMES) {
     document.getElementById("n-" + a).textContent = shown[a] ? shown[a].toLocaleString() : "";
   }
+  // Selection does not survive a projection change: cluster ids are per-fit
+  // and mean nothing across projections.
+  selected = null;
+  applySelection();
   warn.hidden = !approximate;
   if (approximate) {
     warn.textContent = "No projection for this combination — showing the "
       + "all-messages layout, filtered. Positions reflect the full corpus.";
   }
+}
+
+/**
+ * Move the camera to frame one cluster.
+ *
+ * Without this, selecting is close to useless: a 155-point cluster inside a
+ * 34k-point cloud occupies a few pixels, so its links are shorter than a
+ * sphere is wide and there is nothing to see. Scrolling does not rescue it
+ * either — zoom moves along the view axis towards cam.target, not towards the
+ * cursor, so the cluster slides off screen as you close in.
+ *
+ * The camera angle is deliberately left alone. Re-orienting on every click
+ * would lose the viewer's sense of where they are in the map, and the whole
+ * value of the dimmed surroundings is that they stay recognisable.
+ */
+function frameCluster(cid) {
+  const p = current;
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  let n = 0;
+  for (let i = 0; i < p.n; i++) {
+    if (p.cluster[i] !== cid) continue;
+    n++;
+    for (let d = 0; d < 3; d++) {
+      const v = p.pos[i*3+d];
+      if (v < lo[d]) lo[d] = v;
+      if (v > hi[d]) hi[d] = v;
+    }
+  }
+  if (!n) return;
+  cam.target = [(lo[0]+hi[0])/2, (lo[1]+hi[1])/2, (lo[2]+hi[2])/2];
+  const extent = Math.max(hi[0]-lo[0], hi[1]-lo[1], hi[2]-lo[2]);
+  // Fit the extent in a 45° vertical FOV, with headroom so the cluster does
+  // not touch the edges. The floor stops a near-degenerate cluster (every
+  // point on top of every other) from putting the camera inside the geometry.
+  cam.dist = Math.max(extent * 1.6, 0.25);
+}
+
+/**
+ * Apply the current selection: dim every other cluster and build the line
+ * buffer for the selected one.
+ *
+ * Colours are rebuilt on the CPU rather than branching in the shader on a
+ * cluster attribute — 35k RGB triples is well under a millisecond, and it
+ * keeps the vertex shader free of a uniform that only matters on click.
+ */
+function applySelection() {
+  const p = current;
+  if (!p) return;
+  const maxId = p.cluster.length ? Math.max.apply(null, p.cluster) : 0;
+  const palette = clusterColours(maxId);
+  const colors = new Float32Array(p.n * 3);
+  for (let i = 0; i < p.n; i++) {
+    const c = p.cluster[i];
+    // Dimmed rather than hidden: the surrounding cloud is the context that
+    // makes a selected cluster's position meaningful.
+    const k = (selected === null || c === selected) ? 1.0 : 0.14;
+    colors[i*3]   = palette[c*3]   * k;
+    colors[i*3+1] = palette[c*3+1] * k;
+    colors[i*3+2] = palette[c*3+2] * k;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf.color);
+  gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+
+  lineCount = 0;
+  if (selected !== null && p.ne) {
+    const px = [], st = [];
+    for (let e = 0; e < p.ne; e++) {
+      const a = p.ea[e];
+      if (p.cluster[a] !== selected) continue;   // edges are intra-cluster
+      const b = p.eb[e];
+      px.push(p.pos[a*3], p.pos[a*3+1], p.pos[a*3+2],
+              p.pos[b*3], p.pos[b*3+1], p.pos[b*3+2]);
+      st.push(p.es[e], p.es[e]);
+    }
+    if (px.length) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf.linePos);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(px), gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf.lineStr);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(st), gl.STATIC_DRAW);
+      lineCount = st.length;
+    }
+  }
+
+  const el = document.getElementById("s-selected");
+  if (selected === null) {
+    // Deselecting pulls back out. Otherwise clicking away from a framed
+    // cluster leaves you zoomed into an anonymous patch of cloud with no
+    // obvious way back to the map you started from.
+    cam.target = [0, 0, 0];
+    cam.dist = p.radius * 2.4;
+    el.textContent = "";
+  } else {
+    frameCluster(selected);
+    const size = p.meta.clusters.find((c) => c.id === selected);
+    el.textContent = `cluster ${selected} — ${(size ? size.size : 0).toLocaleString()}`
+      + ` points, ${(lineCount / 2).toLocaleString()} links`;
+  }
   draw();
 }
+
+/**
+ * Nearest node to a click, in screen space.
+ *
+ * Brute force over every point. At 35k that is a fraction of a millisecond
+ * and needs no spatial index, no picking framebuffer and no second render
+ * pass — all of which would be more code to get wrong.
+ */
+function pickAt(mx, my) {
+  const p = current;
+  if (!p) return null;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const mvp = currentMVP;
+  let best = -1, bestD = 24 * 24;   // px radius, squared
+  for (let i = 0; i < p.n; i++) {
+    const x = p.pos[i*3], y = p.pos[i*3+1], z = p.pos[i*3+2];
+    const cw = mvp[3]*x + mvp[7]*y + mvp[11]*z + mvp[15];
+    if (cw <= 0) continue;                       // behind the camera
+    const cx = (mvp[0]*x + mvp[4]*y + mvp[8]*z  + mvp[12]) / cw;
+    const cy = (mvp[1]*x + mvp[5]*y + mvp[9]*z  + mvp[13]) / cw;
+    const sx = (cx * 0.5 + 0.5) * w, sy = (1 - (cy * 0.5 + 0.5)) * h;
+    const d = (sx - mx) * (sx - mx) + (sy - my) * (sy - my);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best >= 0 ? p.cluster[best] : null;
+}
+
+let currentMVP = null;
 
 function draw() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -421,7 +598,11 @@ function draw() {
   ];
   const view = lookAt(eye, cam.target, [0, 1, 0]);
   const proj = perspective(Math.PI / 4, w / h, cam.dist * 0.01, cam.dist * 10);
-  gl.uniformMatrix4fv(loc.mvp, false, mul(proj, view));
+  const mvp = mul(proj, view);
+  currentMVP = mvp;
+
+  gl.useProgram(prog);
+  gl.uniformMatrix4fv(loc.mvp, false, mvp);
   gl.uniform1f(loc.size, 420 * dpr);
 
   for (const [l, b, size] of [[loc.pos, buf.pos, 3], [loc.color, buf.color, 3], [loc.visible, buf.visible, 1]]) {
@@ -430,13 +611,40 @@ function draw() {
     gl.vertexAttribPointer(l, size, gl.FLOAT, false, 0, 0);
   }
   gl.drawArrays(gl.POINTS, 0, current.n);
+
+  // Links last, as a translucent overlay.
+  //
+  // Order matters and is not obvious: drawn *before* the points they were
+  // invisible, because a selected cluster is by construction dense — the very
+  // property that made it a cluster — so its spheres covered almost every
+  // pixel its links occupied and painted over all of them. Drawn after, the
+  // links read against both the spheres and the dimmed background.
+  //
+  // Depth writes stay off so a link never occludes a sphere further away;
+  // depth *testing* stays on so a link genuinely behind the cloud is still
+  // hidden, which is what keeps the 3D reading intact while rotating.
+  if (lineCount > 0) {
+    gl.useProgram(lineProg);
+    gl.uniformMatrix4fv(lineLoc.mvp, false, mvp);
+    gl.depthMask(false);
+    for (const [l, b, size] of [[lineLoc.pos, buf.linePos, 3], [lineLoc.strength, buf.lineStr, 1]]) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.enableVertexAttribArray(l);
+      gl.vertexAttribPointer(l, size, gl.FLOAT, false, 0, 0);
+    }
+    gl.drawArrays(gl.LINES, 0, lineCount);
+    gl.depthMask(true);
+    gl.disableVertexAttribArray(lineLoc.pos);
+    gl.disableVertexAttribArray(lineLoc.strength);
+  }
 }
 
 // ── interaction ────────────────────────────────────────────────────────────
 
 let drag = null;
 canvas.addEventListener("pointerdown", (e) => {
-  drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey };
+  drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey,
+           x0: e.clientX, y0: e.clientY, moved: 0 };
   canvas.classList.add("dragging");
   canvas.setPointerCapture(e.pointerId);
 });
@@ -444,6 +652,7 @@ canvas.addEventListener("pointermove", (e) => {
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
+  drag.moved += Math.abs(dx) + Math.abs(dy);
   if (drag.pan) {
     cam.target[0] -= dx * cam.dist * 0.0015;
     cam.target[1] += dy * cam.dist * 0.0015;
@@ -456,7 +665,18 @@ canvas.addEventListener("pointermove", (e) => {
   draw();
 });
 for (const ev of ["pointerup", "pointercancel"]) {
-  canvas.addEventListener(ev, () => { drag = null; canvas.classList.remove("dragging"); });
+  canvas.addEventListener(ev, (e) => {
+    // A click is a pointerup that barely moved. Without the threshold every
+    // rotate would also reselect, which makes the graph feel possessed.
+    if (drag && drag.moved < 5 && ev === "pointerup") {
+      const r = canvas.getBoundingClientRect();
+      const hit = pickAt(e.clientX - r.left, e.clientY - r.top);
+      selected = (hit === null || hit === selected) ? null : hit;
+      applySelection();
+    }
+    drag = null;
+    canvas.classList.remove("dragging");
+  });
 }
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
