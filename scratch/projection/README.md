@@ -25,11 +25,29 @@ Generated `*.json` is gitignored — it regenerates faster than it would clone.
 
 ## What each script does
 
+### Projection
+
 | Script | Purpose |
 |---|---|
 | `project_multi.py` | **The main one.** One projection per author combination (`martin`, `claude`, `tool`, `martin-claude`, `all`). Drops scatter, emits no edges. |
 | `project_corpus.py` | Single-corpus variant that *does* emit edges (kNN or threshold). Kept for the tiled-GEMM implementation and for cv-chat, which is small enough to want edges. |
-| `halfvec.py` | Measures what `halfvec` (float16) storage does to search ranking. Evidence for HOME-311. |
+
+### Author classification (HOME-309/310/311)
+
+Run in this order — `ground_truth.py` first, everything else depends on its output.
+
+| Script | Purpose |
+|---|---|
+| `ground_truth.py` | Exact labels from Claude Code transcripts. A genuine user message has a **string** `content`; a tool result has a **list** of `tool_result` blocks. Covers 27% of the corpus (transcripts only go back to 2026-06-24). |
+| `train_author.py` | Trains logistic regression on those labels using embeddings already in the database. **93.6% accuracy, 93.3% balanced.** Writes `author_clf.joblib` (5 KB). |
+| `llm_adjudicate.py` | LLM baseline via Ollama. `--benchmark N` grades it against ground truth; `--run` adjudicates the classifier's uncertainty band. |
+| `prompt_v3.py` | The base-rate experiment — three prompt variants on a balanced sample. |
+| `halfvec.py` | Measures `halfvec` (float16) impact on search ranking. Evidence for HOME-311. |
+| `token_cost.py` | Real token counts and API cost for the "just use an LLM" baseline. |
+
+**Do not use the regex in `project_multi.py` for anything that matters.** It is
+92.6% precise but **21.8% recall** — it finds a fifth of tool output. It exists
+only because it predates the classifier. Use `author_clf.joblib`.
 
 ## Three things that are load-bearing
 
@@ -47,6 +65,40 @@ real fix is classifying at capture from transcript content-block types
 
 **Pin the seed.** UMAP is stochastic. Without a fixed seed the map reshuffles
 between runs and you cannot reproduce a layout or reason about what changed.
+
+## Classifying authors: what actually worked
+
+Task: is a `role='user'` message something Martin typed, or output from a tool?
+Measured on transcript ground truth, balanced accuracy so class imbalance
+cannot flatter anything (86% of user-role rows are tool output).
+
+| Approach | Accuracy | **Balanced** | Time | Cost |
+|---|---|---|---|---|
+| Frontier API ($3/$15 per Mtok) | not measured | — | hours | **£36–54** |
+| `llama3.2:3b`, zero-shot | 88.6% | **49.4%** | 2.5 h | £0 |
+| `llama3.2:3b`, few-shot | — | 65.2% | 2.5 h | £0 |
+| `llama3.2:3b`, few-shot + balanced prior | — | 75.2% | 2.5 h | £0 |
+| **Always answer "TOOL"** | **90.3%** | 50.0% | 0 s | £0 |
+| **Embeddings + logistic regression** | **93.6%** | **93.3%** | **ms** | **£0** |
+
+The zero-shot LLM scored **worse than a constant function**. Its confusion
+matrix had no correct-human cell at all: 0 of 28. The accuracy figure was
+entirely class imbalance.
+
+Two things worth carrying forward:
+
+**Stating a false balanced prior beat stating the true one** (75.2% vs 69.5%).
+The model's problem was never calibration — its prior toward TOOL was already
+too strong, so the accurate base rate just licensed the bias.
+
+**You can weight classes in a model; you can only ask an LLM nicely.** The
+logistic regression uses `class_weight="balanced"` — the same correction as
+arithmetic rather than as a request. The zero-shot prompt explicitly said
+"long or technical does not mean TOOL" and was ignored completely.
+
+The semantics come from mxbai-embed-large, run months ago as ordinary ingest.
+The classifier is a 5 KB boundary through that space. Borrowed understanding,
+owned judgement.
 
 ## Measurements worth not re-deriving
 

@@ -6,3 +6,6 @@
 # Local venv
 .venv/
 __pycache__/
+
+# Trained model — regenerates from train_author.py in seconds
+*.joblib
