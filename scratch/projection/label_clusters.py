@@ -117,6 +117,38 @@ def phrase(terms):
     return ", ".join(terms[:3]) if terms else None
 
 
+def grounded(label, terms, n=6):
+    """Does the label actually mention something the cluster is about?
+
+    A small model asked to name a cluster it does not understand does not say
+    so — it emits a confident generic phrase. Measured over 1,460 clusters with
+    llama3.2:3b, the failure is consistent and always in the same direction:
+
+        ddr3, sata, fpga     -> "Software Engineering Chat Log"
+        great, nah, mornin   -> "Software engineering meeting discussion"
+        spacex, spcx, hedge  -> "Software Engineering Chat Log"
+
+    None of those is a paraphrase; they are inventions, and each is *worse*
+    than the terms it replaced, because it reads as authoritative while saying
+    nothing. The cluster about SpaceX and hedging is not a software engineering
+    chat log.
+
+    So a label is kept only if it is anchored in the evidence: at least one of
+    the top terms must appear in it. Prefix matching rather than equality, so
+    "tests" grounds "testing" and "cognito" grounds "Cognito". Short terms are
+    compared whole, since a four-character prefix of a five-character word
+    matches far too much.
+    """
+    if not label or not terms:
+        return False
+    low = label.lower()
+    for t in terms[:n]:
+        stem = t[:4] if len(t) > 5 else t
+        if stem in low:
+            return True
+    return False
+
+
 def ollama_label(terms, samples, model, endpoint):
     """Turn terms into a short English phrase. Returns None on any failure.
 
@@ -127,15 +159,21 @@ def ollama_label(terms, samples, model, endpoint):
     import urllib.error
     import urllib.request
 
+    # The framing is deliberately neutral about domain. An earlier version
+    # opened "extracted from a cluster of messages in a software engineering
+    # chat log", and llama3.2:3b returned "Software Engineering Chat Log" for
+    # every cluster it could not otherwise characterise — including one whose
+    # terms were spacex, spcx, hedge. The prompt was handing over the generic
+    # answer and then being blamed for using it.
     prompt = (
-        "These keywords were extracted from a cluster of messages in a "
-        "software engineering chat log:\n\n"
+        "These keywords were extracted from one cluster of related messages:\n\n"
         + ", ".join(terms[:12])
-        + "\n\nHere are three example messages from the cluster:\n\n"
-        + "\n---\n".join(s[:300] for s in samples)
-        + "\n\nReply with a topic label of at most five words describing what "
-        "this cluster is about. Reply with the label only — no quotes, no "
-        "explanation, no trailing full stop."
+        + ("\n\nExample messages from the cluster:\n\n"
+           + "\n---\n".join(s[:300] for s in samples) if samples else "")
+        + "\n\nName this cluster's topic in at most five words. Use the "
+        "keywords themselves wherever they are meaningful. If the keywords do "
+        "not suggest a coherent topic, reply with exactly: UNCLEAR\n"
+        "Reply with the label only — no quotes, no explanation, no full stop."
     )
     body = json.dumps({
         "model": model,
@@ -154,6 +192,10 @@ def ollama_label(terms, samples, model, endpoint):
         return None
 
     label = " ".join(text.strip().strip('"').split())
+    # Giving the model an explicit way to decline is what makes the refusal
+    # usable — without UNCLEAR in the prompt it invents rather than abstains.
+    if label.upper().startswith("UNCLEAR"):
+        return None
     # A model that ignores "five words" and writes a paragraph has not produced
     # a label; the terms are better than a truncated sentence.
     return label if label and len(label) <= 60 else None
@@ -201,7 +243,7 @@ def main():
 
         terms = ctfidf(docs, a.top_n)
 
-        labelled = 0
+        labelled = rejected = 0
         for c in doc.get("clusters", []):
             t = terms.get(c["id"])
             if not t:
@@ -209,15 +251,24 @@ def main():
             c["terms"] = t[:8]
             c["label"] = None
             if a.ollama:
-                c["label"] = ollama_label(
+                cand = ollama_label(
                     t, samples.get(c["id"], []), a.ollama, a.ollama_endpoint)
+                if grounded(cand, t):
+                    c["label"] = cand
+                else:
+                    if cand:
+                        rejected += 1
+                    c["label"] = None
             if not c["label"]:
                 c["label"] = phrase(t)
             labelled += 1
 
         doc["label_method"] = f"c-tf-idf+{a.ollama}" if a.ollama else "c-tf-idf"
         f.write_text(json.dumps(doc))
-        log(f"{f.name:<28} labelled {labelled}/{len(doc.get('clusters', []))} clusters")
+        msg = f"{f.name:<28} labelled {labelled}/{len(doc.get('clusters', []))} clusters"
+        if rejected:
+            msg += f"  ({rejected} ungrounded LLM labels rejected back to terms)"
+        log(msg)
 
 
 if __name__ == "__main__":
