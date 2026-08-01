@@ -199,19 +199,40 @@ uniform mat4 uMVP;
 uniform float uSize;
 varying vec3 vColor;
 varying float vVisible;
+varying float vSize;
+varying vec3 vSeed;
 void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
   // Perspective-correct sizing, clamped so distant points stay visible and
   // near ones do not become blobs.
-  gl_PointSize = clamp(uSize / max(gl_Position.w, 0.001), 2.0, 14.0);
+  gl_PointSize = clamp(uSize / max(gl_Position.w, 0.001), 2.0, 46.0);
   vColor = aColor;
   vVisible = aVisible;
+  vSize = gl_PointSize;
+  // World position doubles as a per-sphere random seed, so neighbouring
+  // spheres get different surface patterns rather than a repeated stamp.
+  vSeed = aPos;
 }`;
 
 const FRAG = `
 precision mediump float;
 varying vec3 vColor;
 varying float vVisible;
+varying float vSize;
+varying vec3 vSeed;
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+/// Smooth value noise. Cheap enough to afford twice per fragment, which is
+/// what the bump gradient below needs.
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
 
 // Sphere imposter: the geometry is still a flat point, but the normal is
 // reconstructed as though the disc were a sphere and then lit. A real sphere
@@ -226,6 +247,22 @@ void main() {
 
   // z on the unit sphere; y flipped because gl_PointCoord runs top-down.
   vec3 N = vec3(d.x, -d.y, sqrt(1.0 - r2));
+
+  // Surface texture, faded in by apparent size. Below ~7px a sphere is too
+  // small to show relief and the noise would read as dithering, so it is
+  // suppressed entirely; it emerges as you zoom in.
+  float detail = smoothstep(6.0, 20.0, vSize);
+  if (detail > 0.001) {
+    // Offset the noise field per sphere so neighbours differ.
+    vec2 uv = d * 4.5 + vec2(hash(vSeed.xy), hash(vSeed.yz)) * 32.0;
+    float e = 0.35;
+    // Central difference across the noise field gives a bump gradient; nudging
+    // the normal by it is what catches the light, rather than just tinting.
+    vec2 grad = vec2(noise(uv + vec2(e, 0.0)) - noise(uv - vec2(e, 0.0)),
+                     noise(uv + vec2(0.0, e)) - noise(uv - vec2(0.0, e)));
+    N = normalize(N + vec3(grad, 0.0) * detail * 0.9);
+  }
+
   vec3 L = normalize(vec3(-0.35, 0.55, 0.75));
 
   float diff = max(dot(N, L), 0.0);
