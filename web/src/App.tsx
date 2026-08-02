@@ -11,6 +11,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { theme } from './theme';
 import Config from './config/config';
 import AnalyticsPage from './components/pages/AnalyticsPage';
+import CvChatGraphPage from './components/pages/CvChatGraphPage';
 import { CognitoIdentityClient, Credentials, GetCredentialsForIdentityCommand, GetIdCommand } from '@aws-sdk/client-cognito-identity';
 
 const App: React.FC = () => {
@@ -98,6 +99,12 @@ const App: React.FC = () => {
                             onChange={(_, v) => setTabId(v)}
                         >
                             <Tab label="Analytics" />
+                            {/* ADMIN-12. Reads from Cal over the mTLS bridge
+                                rather than from AWS, so it needs the raw
+                                Cognito access token — not the SigV4
+                                credentials the Analytics tab exchanges it
+                                for. */}
+                            <Tab label="cv.nakomis.com" />
                         </Tabs>
                         <Box sx={{ flexGrow: 1 }} />
                         <Button
@@ -111,6 +118,7 @@ const App: React.FC = () => {
                 </AppBar>
                 <Box sx={{ bgcolor: 'background.default', minHeight: 'calc(100vh - 48px)' }}>
                     {tabId === 0 && <AnalyticsPage creds={creds!} />}
+                    {tabId === 1 && <CvChatGraphPage token={auth.user?.access_token ?? ''} />}
                 </Box>
             </ThemeProvider>
         );
