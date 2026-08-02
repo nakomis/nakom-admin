@@ -134,47 +134,92 @@ export class ApiStack extends cdk.Stack {
             resources: [schedulerRole.roleArn],
         }));
 
-        // --- import-generate Lambda ---
-        const importGenerate = new nodejs.NodejsFunction(this, 'ImportGenerateFn', {
-            functionName: 'nakom-admin-import-generate',
-            entry: 'lambda/import-generate/handler.ts',
+        // --- cvchat-forward Lambda (ADMIN-6) ---
+        //
+        // Replaces import-generate. That function embedded each record with
+        // Bedrock Titan and staged it in S3 for import-execute to load into
+        // Aurora; this one age-encrypts the record and puts it on an SQS queue
+        // for Cal, which embeds with the estate's single model and writes to
+        // Luke's pgvector. See lambda/cvchat-forward/handler.ts for why the
+        // embedding had to move rather than merely being cheaper elsewhere.
+        //
+        // Config comes from the SSM parameters CvChatIngestStack publishes in
+        // the home-servers CDK app (same account), resolved at *deploy* time
+        // as CloudFormation dynamic references.
+        //
+        // Not valueFromLookup, which reads SSM during synth: that needs
+        // credentials in the target account just to produce a template, so it
+        // breaks `cdk synth` for anyone without them and breaks CI outright —
+        // and it bakes the value into cdk.context.json, where a later change
+        // to the parameter is silently ignored until someone clears the cache.
+        // A dynamic reference costs nothing at synth and fails at deploy with
+        // a clear CloudFormation error if the parameter is missing, which is
+        // the correct ordering signal: this stack cannot deploy before
+        // CvChatIngestStack has.
+        const cvchatParam = (name: string) =>
+            ssm.StringParameter.valueForStringParameter(this, `/cv-chat/${props.deployEnv}/${name}`);
+
+        const cvchatQueueUrl = cvchatParam('queue-url');
+        const cvchatPayloadBucket = cvchatParam('payload-bucket');
+
+        const cvchatForward = new nodejs.NodejsFunction(this, 'CvChatForwardFn', {
+            functionName: 'nakom-admin-cvchat-forward',
+            entry: 'lambda/cvchat-forward/handler.ts',
             handler: 'handler',
             runtime,
             memorySize: 256,
+            // Unchanged from import-generate at 300s, but for a different
+            // reason: that budget used to be dominated by a Bedrock call per
+            // record. This function only encrypts and enqueues, so the time
+            // now goes on a backlog of batches — which is what makes the full
+            // corpus replay (ADMIN-7) able to run through this same path.
             timeout: cdk.Duration.seconds(300),
             bundling,
             environment: {
                 CHAT_LOGS_TABLE: 'cv-chat-logs',
-                STAGING_BUCKET: analyticsStack.stagingBucket.bucketName,
                 IMPORT_CURSOR_PARAM: '/nakom.is/analytics/CVCHAT/last-imported-timestamp',
-                IMPORT_EXECUTE_FUNCTION_NAME: 'nakom-admin-import-execute',
+                CVCHAT_QUEUE_URL: cvchatQueueUrl,
+                PAYLOAD_BUCKET: cvchatPayloadBucket,
+                // The consumer's age *public* key. A recipient is not a
+                // secret — it can only encrypt — so it lives in the
+                // environment rather than in Secrets Manager. The matching
+                // identity never leaves Cal.
+                AGE_RECIPIENT: ssm.StringParameter.valueForStringParameter(
+                    this,
+                    `/conversation-memory/${props.deployEnv}/age-recipient`,
+                ),
             },
         });
 
         // Read cv-chat-logs DDB table (same account, eu-west-2)
-        importGenerate.addToRolePolicy(new iam.PolicyStatement({
+        cvchatForward.addToRolePolicy(new iam.PolicyStatement({
             actions: ['dynamodb:Query'],
             resources: [`arn:aws:dynamodb:${region}:${account}:table/cv-chat-logs`],
         }));
-        // Bedrock Titan Embed v2
-        importGenerate.addToRolePolicy(new iam.PolicyStatement({
-            actions: ['bedrock:InvokeModel'],
-            resources: [`arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0`],
-        }));
-        // S3 write to staging bucket
-        analyticsStack.stagingBucket.grantWrite(importGenerate, 'import-staging/*');
-        // SSM read/write for import cursor
-        importGenerate.addToRolePolicy(new iam.PolicyStatement({
+        // SSM read/write for the import cursor
+        cvchatForward.addToRolePolicy(new iam.PolicyStatement({
             actions: ['ssm:GetParameter', 'ssm:PutParameter'],
             resources: [
                 `arn:aws:ssm:${region}:${account}:parameter/nakom.is/analytics/CVCHAT/last-imported-timestamp`,
             ],
         }));
-        // Invoke import-execute async
-        importGenerate.addToRolePolicy(new iam.PolicyStatement({
-            actions: ['lambda:InvokeFunction'],
-            resources: [`arn:aws:lambda:${region}:${account}:function:nakom-admin-import-execute`],
-        }));
+        // Send on the ingest queue, and claim-check writes under the cvchat/
+        // prefix. Attached as the managed policy CvChatIngestStack publishes,
+        // rather than written out again here: the grant is defined next to the
+        // queue it grants on, and neither CDK app needs the other's construct
+        // tree. That policy is deliberately send-only and carries no rights at
+        // all on the conversation-memory queue — a compromise of this
+        // public-facing pipeline must not reach the private corpus.
+        cvchatForward.role!.addManagedPolicy(
+            iam.ManagedPolicy.fromManagedPolicyArn(
+                this,
+                'CvChatForwarderPolicy',
+                cvchatParam('forwarder-policy-arn'),
+            ),
+        );
+
+        // No Bedrock grant. Its absence is the enforcement of the one-model
+        // invariant — see the handler's module docs.
 
         // --- import-execute Lambda (in VPC) ---
         const importExecute = new nodejs.NodejsFunction(this, 'ImportExecuteFn', {
@@ -298,7 +343,11 @@ export class ApiStack extends cdk.Stack {
         addRoute(apigwv2.HttpMethod.GET, '/rds/timer', rdsControl);
         addRoute(apigwv2.HttpMethod.POST, '/rds/extend-timer', rdsControl);
 
-        addRoute(apigwv2.HttpMethod.POST, '/import/generate', importGenerate);
+        // Kept at the same path so the console's existing "run import" button
+        // keeps working while the rest of ADMIN-8..10 lands. The route now
+        // reaches the forwarder; /import/execute goes away with AnalyticsStack
+        // (ADMIN-10), which is what still owns Aurora.
+        addRoute(apigwv2.HttpMethod.POST, '/import/generate', cvchatForward);
         addRoute(apigwv2.HttpMethod.POST, '/import/execute', importExecute);
 
         addRoute(apigwv2.HttpMethod.POST, '/query/{type}', queryFn);
