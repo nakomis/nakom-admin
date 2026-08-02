@@ -11,9 +11,11 @@
  * layout visibly taking seconds, not a number measured anywhere.
  *
  * Deliberately not d3-force-3d or three.js: this is ~80 lines of vector
- * arithmetic, and the existing 2D SimilarityGraph already pulls in d3 for a
- * different purpose. A dependency here would be bigger than the thing it
- * replaced.
+ * arithmetic, and pulling in either would be bigger than the thing it
+ * replaced. The 2D graph that did use d3 is gone (ADMIN-10), and d3, plotly
+ * and umap-js came out of package.json with it — the whole point of moving
+ * the projection server-side and the layout here is that the browser needs
+ * none of them.
  *
  * The simulation is a plain function over plain arrays with an injected RNG,
  * so it is testable without a canvas — which is the whole reason it lives in

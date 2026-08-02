@@ -6,19 +6,16 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import { Construct } from 'constructs';
 import { CognitoStack } from './cognito-stack';
-import { AnalyticsStack } from './analytics-stack';
 import { DeployEnv, getEnvConfig } from './env-config';
 
 export interface ApiStackProps extends cdk.StackProps {
     deployEnv: DeployEnv;
     cognitoStack: CognitoStack;
-    analyticsStack: AnalyticsStack;
 }
 
 export class ApiStack extends cdk.Stack {
@@ -27,7 +24,7 @@ export class ApiStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props: ApiStackProps) {
         super(scope, id, props);
 
-        const { cognitoStack, analyticsStack } = props;
+        const { cognitoStack } = props;
         const config = getEnvConfig(props.deployEnv);
 
         // --- HTTP API ---
@@ -54,85 +51,15 @@ export class ApiStack extends cdk.Stack {
             resources: [this.api.arnForExecuteApi('*', '/*', '*')],
         }));
 
-        // Allow the browser (Cognito authenticated role) to download embedding exports from S3
-        analyticsStack.stagingBucket.grantRead(cognitoStack.authenticatedRole, 'embedding-export/*');
-
         const bundling = { minify: true, sourceMap: true };
         const runtime = lambda.Runtime.NODEJS_22_X;
         const account = this.account;
         const region = this.region;
 
-        // --- rds-control Lambda ---
-        const rdsControl = new nodejs.NodejsFunction(this, 'RdsControlFn', {
-            functionName: 'nakom-admin-rds-control',
-            entry: 'lambda/rds-control/handler.ts',
-            handler: 'handler',
-            runtime,
-            memorySize: 128,
-            timeout: cdk.Duration.seconds(60),
-            bundling,
-        });
-
-        rdsControl.addToRolePolicy(new iam.PolicyStatement({
-            actions: [
-                'rds:StartDBCluster',
-                'rds:StopDBCluster',
-                'rds:CreateDBClusterSnapshot',
-                'rds:DeleteDBClusterSnapshot',
-                'rds:DescribeDBClusterSnapshots',
-                'rds:DescribeDBClusters',
-                'rds:RestoreDBClusterFromSnapshot',
-                'rds:CreateDBInstance',
-            ],
-            resources: [
-                analyticsStack.dbCluster.clusterArn,
-                `arn:aws:rds:${region}:${account}:cluster-snapshot:*`,
-                `arn:aws:rds:${region}:${account}:cluster:*`,
-                `arn:aws:rds:${region}:${account}:db:*`,
-            ],
-        }));
-        // SSM reads for RDS instance ID and secret ARN
-        rdsControl.addToRolePolicy(new iam.PolicyStatement({
-            actions: ['ssm:GetParameter'],
-            resources: [
-                `arn:aws:ssm:${region}:${account}:parameter/nakom-admin/rds/*`,
-            ],
-        }));
-
-        // Construct the Lambda ARN from its known function name to avoid circular dependency
-        const rdsControlArn = `arn:aws:lambda:${region}:${account}:function:nakom-admin-rds-control`;
-
-        // Scheduler IAM role — allows EventBridge Scheduler to invoke rds-control
-        const schedulerRole = new iam.Role(this, 'RdsSchedulerRole', {
-            roleName: 'nakom-admin-rds-scheduler-role',
-            assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
-        });
-        schedulerRole.addToPolicy(new iam.PolicyStatement({
-            actions: ['lambda:InvokeFunction'],
-            resources: [rdsControlArn],
-        }));
-
-        // Give rds-control its own ARN and the scheduler role ARN
-        rdsControl.addEnvironment('LAMBDA_ARN', rdsControlArn);
-        rdsControl.addEnvironment('SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
-
-        // SSM: read/write/delete the shutdown-at timestamp
-        rdsControl.addToRolePolicy(new iam.PolicyStatement({
-            actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter'],
-            resources: [`arn:aws:ssm:${region}:${account}:parameter/nakom-admin/rds/shutdown-at`],
-        }));
-
-        // EventBridge Scheduler: create and delete the one-shot rule
-        rdsControl.addToRolePolicy(new iam.PolicyStatement({
-            actions: ['scheduler:CreateSchedule', 'scheduler:DeleteSchedule', 'scheduler:GetSchedule'],
-            resources: [`arn:aws:scheduler:${region}:${account}:schedule/default/nakom-admin-rds-shutdown`],
-        }));
-
-        // Allow rds-control to pass the scheduler role to EventBridge Scheduler
-        rdsControl.addToRolePolicy(new iam.PolicyStatement({
-            actions: ['iam:PassRole'],
-            resources: [schedulerRole.roleArn],
-        }));
+        // rds-control, the EventBridge scheduler role and the Aurora grants
+        // that used to live here are gone with AnalyticsStack (ADMIN-10). They
+        // existed to start and stop a cluster that cost money to leave
+        // running; the console's data is now on Luke, which is on anyway.
 
         // --- cvchat-forward Lambda (ADMIN-6) ---
         //
@@ -221,53 +148,11 @@ export class ApiStack extends cdk.Stack {
         // No Bedrock grant. Its absence is the enforcement of the one-model
         // invariant — see the handler's module docs.
 
-        // --- import-execute Lambda (in VPC) ---
-        const importExecute = new nodejs.NodejsFunction(this, 'ImportExecuteFn', {
-            functionName: 'nakom-admin-import-execute',
-            entry: 'lambda/import-execute/handler.ts',
-            handler: 'handler',
-            runtime,
-            memorySize: 256,
-            timeout: cdk.Duration.seconds(300),
-            bundling,
-            vpc: analyticsStack.vpc,
-            vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-            securityGroups: [analyticsStack.lambdaSecurityGroup],
-            environment: {
-                STAGING_BUCKET: analyticsStack.stagingBucket.bucketName,
-                DB_HOST: analyticsStack.dbCluster.clusterEndpoint.hostname,
-                DB_NAME: 'analytics',
-                DB_USER: 'analytics',
-                DB_PASS: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),
-            },
-        });
-
-        // S3 read from staging bucket (via VPC Gateway endpoint)
-        analyticsStack.stagingBucket.grantRead(importExecute, 'import-staging/*');
-
-        // --- query Lambda (in VPC) ---
-        const queryFn = new nodejs.NodejsFunction(this, 'QueryFn', {
-            functionName: 'nakom-admin-query',
-            entry: 'lambda/query/handler.ts',
-            handler: 'handler',
-            runtime,
-            memorySize: 256,
-            timeout: cdk.Duration.seconds(30),
-            bundling,
-            vpc: analyticsStack.vpc,
-            vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-            securityGroups: [analyticsStack.lambdaSecurityGroup],
-            environment: {
-                DB_HOST: analyticsStack.dbCluster.clusterEndpoint.hostname,
-                DB_NAME: 'analytics',
-                DB_USER: 'analytics',
-                DB_PASS: analyticsStack.dbSecret.secretValueFromJson('password').unsafeUnwrap(),
-                STAGING_BUCKET: analyticsStack.stagingBucket.bucketName,
-            },
-        });
-
-        // S3 write for embedding_export fallback (large payloads go to S3 instead of inline)
-        analyticsStack.stagingBucket.grantWrite(queryFn, 'embedding-export/*');
+        // import-execute and the query Lambda are gone too (ADMIN-10). Both
+        // ran inside AnalyticsStack's VPC purely to reach Aurora — which is
+        // also why this stack no longer needs ec2 or a VPC at all. Their work
+        // is done by Cal's /cvchat endpoints, reached over the mTLS bridge
+        // rather than over a private subnet.
 
         // --- monitor-logs Lambda ---
         const monitorLogs = new nodejs.NodejsFunction(this, 'MonitorLogsFn', {
@@ -334,23 +219,13 @@ export class ApiStack extends cdk.Stack {
             });
         };
 
-        addRoute(apigwv2.HttpMethod.GET, '/rds/status', rdsControl);
-        addRoute(apigwv2.HttpMethod.GET, '/rds/snapshots', rdsControl);
-        addRoute(apigwv2.HttpMethod.POST, '/rds/start', rdsControl);
-        addRoute(apigwv2.HttpMethod.POST, '/rds/stop', rdsControl);
-        addRoute(apigwv2.HttpMethod.POST, '/rds/snapshot', rdsControl);
-        addRoute(apigwv2.HttpMethod.POST, '/rds/restore', rdsControl);
-        addRoute(apigwv2.HttpMethod.GET, '/rds/timer', rdsControl);
-        addRoute(apigwv2.HttpMethod.POST, '/rds/extend-timer', rdsControl);
 
-        // Kept at the same path so the console's existing "run import" button
-        // keeps working while the rest of ADMIN-8..10 lands. The route now
-        // reaches the forwarder; /import/execute goes away with AnalyticsStack
-        // (ADMIN-10), which is what still owns Aurora.
+        // Kept at the same path so the console's "forward new records" button
+        // did not have to move. /rds/*, /query/{type} and /import/execute are
+        // gone with Aurora (ADMIN-9/10); what is left here is what never
+        // depended on it — the CloudFront log miner and the DynamoDB blocklist.
         addRoute(apigwv2.HttpMethod.POST, '/import/generate', cvchatForward);
-        addRoute(apigwv2.HttpMethod.POST, '/import/execute', importExecute);
 
-        addRoute(apigwv2.HttpMethod.POST, '/query/{type}', queryFn);
 
         addRoute(apigwv2.HttpMethod.POST, '/logs/mine', monitorLogs);
 

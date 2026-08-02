@@ -63,6 +63,21 @@ export interface CvChatDailyPoint {
     rate_limited: number;
 }
 
+export interface CvChatToolUse {
+    tool: string;
+    uses: number;
+}
+
+/** One visitor IP's activity. Was an Aurora query until ADMIN-9. */
+export interface CvChatIpActivity {
+    ip: string;
+    total_requests: number;
+    active_days: number;
+    first_seen: string;
+    last_seen: string;
+    rate_limit_hits: number;
+}
+
 export interface CvChatStats {
     total_records: number;
     embedded_records: number;
@@ -75,6 +90,8 @@ export interface CvChatStats {
     duration_p95_ms: number | null;
     daily: CvChatDailyPoint[];
     edges: number;
+    tools: CvChatToolUse[];
+    ips: CvChatIpActivity[];
 }
 
 export interface CvChatNeighbour {

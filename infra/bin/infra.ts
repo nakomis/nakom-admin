@@ -3,7 +3,6 @@ import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import * as fs from 'fs';
 import { CognitoStack } from '../lib/cognito-stack';
-import { AnalyticsStack } from '../lib/analytics-stack';
 import { CloudfrontStack } from '../lib/cloudfront-stack';
 import { ApiStack } from '../lib/api-stack';
 import { GithubCiStack } from '../lib/github-ci-stack';
@@ -30,16 +29,22 @@ const cognitoStack = new CognitoStack(app, 'AdminCognitoStack', {
     deployEnv,
 });
 
-const analyticsStack = new AnalyticsStack(app, 'AdminAnalyticsStack', {
-    ...londonEnv,
-    deployEnv,
-});
+// AdminAnalyticsStack is gone (ADMIN-10): Aurora Serverless v2, its VPC, the
+// isolated subnets, the security group and the S3 staging bucket. Everything
+// it held is now on Luke's admin_analytics, reached through Cal.
+//
+// DELETING IT IS NOT AUTOMATIC. Removing the stack from this file stops CDK
+// managing it; the CloudFormation stack and its resources stay until someone
+// runs `cdk destroy AdminAnalyticsStack` (or deletes it in the console). Do
+// that only after confirming the backfill has populated Luke — the cluster is
+// the only remaining copy of the Titan-embedded rows, and while those vectors
+// are not reusable (different model), the source records are also in DynamoDB
+// and that is what the backfill reads.
 
 const apiStack = new ApiStack(app, 'AdminApiStack', {
     ...londonEnv,
     deployEnv,
     cognitoStack,
-    analyticsStack,
 });
 
 const cloudfrontStack = new CloudfrontStack(app, 'AdminCloudfrontStack', {

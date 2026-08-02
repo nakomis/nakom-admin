@@ -117,7 +117,7 @@ const App: React.FC = () => {
                     </Box>
                 </AppBar>
                 <Box sx={{ bgcolor: 'background.default', minHeight: 'calc(100vh - 48px)' }}>
-                    {tabId === 0 && <AnalyticsPage creds={creds!} />}
+                    {tabId === 0 && <AnalyticsPage creds={creds!} token={auth.user?.access_token ?? ''} />}
                     {tabId === 1 && <CvChatGraphPage token={auth.user?.access_token ?? ''} />}
                 </Box>
             </ThemeProvider>
