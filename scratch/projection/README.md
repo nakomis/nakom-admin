@@ -32,6 +32,31 @@ Generated `*.json` is gitignored — it regenerates faster than it would clone.
 | `project_multi.py` | **The main one.** One projection per author combination (`martin`, `claude`, `tool`, `martin-claude`, `all`). Drops scatter, emits no edges. |
 | `project_corpus.py` | Single-corpus variant that *does* emit edges (kNN or threshold). Kept for the tiled-GEMM implementation and for cv-chat, which is small enough to want edges. |
 
+### Enrichment — run after `project_multi.py`, in any order
+
+Each reads the `projv2-*.json` files in place and adds one key. All three are
+optional; the viewer degrades to a plainer map without them rather than failing.
+
+| Script | Adds | Cost |
+|---|---|---|
+| `add_edges.py` | `edges` — intra-cluster kNN by **real cosine**, drawn when a cluster is selected. | ~80 s (the fetch), seconds of compute |
+| `label_clusters.py` | `label` + `terms` — c-TF-IDF cluster names. `--ollama MODEL` turns the terms into English as a second pass. | ~2 s over 70k messages |
+| `add_embeddings.py` | `emb` — PCA + int8 vectors so the browser can compute similarity live. `--shared-basis` writes one table for all five instead of one each. `--report` measures the compression. | ~80 s fetch, ~5 s compute |
+
+Then pack: `python3 ../viewer/pack.py . graph.html`.
+
+Two things these got wrong first time, both worth not repeating:
+
+**Edges must come from the embeddings, not the coordinates.** Deriving them
+from the projected 3D positions would be circular — asserting "these are
+similar" using only the positions that already assert it — and would inherit
+every distortion UMAP introduced.
+
+**Labels must come from c-TF-IDF, not from an LLM shown a sample.** A sample of
+a 3,000-message cluster is a guess about the other 2,990. c-TF-IDF asks the
+question a label actually answers — frequent here, rare elsewhere — and is
+deterministic and free.
+
 ### Author classification (HOME-309/310/311)
 
 Run in this order — `ground_truth.py` first, everything else depends on its output.
@@ -112,6 +137,39 @@ Full numbers and context are on the Taiga stories; the headlines:
   6.6 × 10⁻⁵, storage halved.
 - `min_cluster_size` should scale with N. At 20 on Martin-only, 342 clusters and
   no blob; at 100 on the full corpus, two blobs holding 67%.
+- **`max_cluster_size` beats `cluster_selection_method='leaf'`**, which is the
+  documented remedy for one giant cluster and was expected to win. On 45,183
+  martin+claude points, scoring by share of points in a cluster of 15–2000:
+
+  | config | clusters | noise | largest | % useful |
+  |---|---|---|---|---|
+  | `eom mcs=20` | 240 | 25.3% | 16,959 | 37.1% |
+  | `leaf mcs=20` | 334 | 59.2% | 318 | 40.8% |
+  | **`eom mcs=20 max=2000`** | 294 | 50.6% | **1,011** | **49.4%** |
+
+  The blob is not a property of the corpus. Excess-of-mass selection keeps the
+  *most stable* clusters, and a broad featureless region is stable precisely
+  because it has no internal structure to split along. Capping the size forces
+  HDBSCAN further down the condensed tree. Noise roughly doubles, honestly:
+  those points do not become good clusters, they become scatter, which is what
+  they always were.
+- **Do not read a low cluster count as a fact about the data.** The `claude`
+  projection produced 3 clusters over 23,412 messages, which was written up as
+  a finding — that Claude's own messages are semantically homogeneous. It was
+  the same eom artefact; under the cap it is 106 clusters and nothing about the
+  messages changed.
+- **int8 quantisation of embeddings is free; PCA is where the loss is.** At every
+  dimension, float32 and int8 score identically, so a wider dtype buys nothing.
+- **Recall@k is the wrong metric for these vectors.** The *uncompressed*
+  embeddings, quantised and otherwise untouched, score only 89% recall@4 at a
+  mean cosine error of 0.0026 — three thousandths of a cosine reorders the top
+  four. The neighbours are near-ties, so recall measures tie-breaking rather
+  than retrieval. Real query, top eight: 0.852, 0.818, 0.817, 0.814, 0.811,
+  0.800. Measure **quality** instead — the true cosine of what was returned
+  against the true best — which is 97.6% at 128 dimensions.
+- **A single-node neighbour query is affordable at any corpus size; all-pairs is
+  not.** O(n·d) is 12–15 ms over 34k nodes in a browser; O(n²·d) on the
+  16,890-point cluster is 36 billion operations.
 
 ## Known trap
 

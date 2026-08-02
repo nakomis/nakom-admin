@@ -115,7 +115,7 @@ def classify_all(rows, X, martin_threshold):
     return authors
 
 
-def project(X, seed, min_cluster_size, pca_dims):
+def project(X, seed, min_cluster_size, pca_dims, max_cluster_size=None):
     """Normalise -> PCA -> UMAP(3) -> HDBSCAN. Returns (coords, labels)."""
     import umap
 
@@ -131,7 +131,31 @@ def project(X, seed, min_cluster_size, pca_dims):
         random_state=seed,
     ).fit_transform(Xp)
 
-    labels = HDBSCAN(min_cluster_size=min_cluster_size).fit_predict(coords)
+    # max_cluster_size caps how large a cluster HDBSCAN will accept, forcing it
+    # further down the condensed tree wherever one would exceed the cap.
+    #
+    # Without it the martin-claude fit produced a single 16,890-point cluster —
+    # 37% of the corpus in one blob that no label described. That is not a bug
+    # in the data, it is what the default 'excess of mass' selection optimises
+    # for: it keeps the *most stable* clusters, and a broad featureless bulk is
+    # stable precisely because it has no internal structure to split along.
+    #
+    # Measured against cluster_selection_method='leaf', the usual remedy, on
+    # 45,183 martin+claude points (% of points landing in a cluster of 15-2000,
+    # i.e. big enough to be a topic and small enough to label):
+    #
+    #   eom  mcs=20 (was)   240 clusters  25.3% noise  largest 16,959  37.1% useful
+    #   leaf mcs=20         334 clusters  59.2% noise  largest    318  40.8% useful
+    #   eom  mcs=20 max=2000 294 clusters 50.6% noise  largest  1,011  49.4% useful
+    #
+    # The cap wins on every axis against leaf, which was the surprise. What it
+    # costs is honest rather than hidden: noise doubles, because the blob's
+    # points do not become good clusters — they become scatter, which is what
+    # they always were.
+    kw = {"min_cluster_size": min_cluster_size}
+    if max_cluster_size:
+        kw["max_cluster_size"] = max_cluster_size
+    labels = HDBSCAN(**kw).fit_predict(coords)
     return coords, labels
 
 
@@ -141,6 +165,10 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--pca-dims", type=int, default=50)
     p.add_argument("--min-cluster-size", type=int, default=20)
+    p.add_argument("--max-cluster-size", type=int, default=2000,
+                   help="cap on cluster size; forces HDBSCAN further down the "
+                        "condensed tree rather than accepting one featureless "
+                        "blob. 0 disables. See project() for the measurements.")
     p.add_argument("--out-prefix", default="proj")
     p.add_argument("--martin-threshold", type=float, default=0.8,
                    help="classifier probability above which a user-role "
@@ -182,7 +210,8 @@ def main():
 
         log(f"--- {name}: {len(sub):,} nodes ---")
         t = time.perf_counter()
-        coords, labels = project(sub, args.seed, args.min_cluster_size, args.pca_dims)
+        coords, labels = project(sub, args.seed, args.min_cluster_size,
+                                 args.pca_dims, args.max_cluster_size or None)
         keep = labels != -1
         sizes = {int(c): int((labels == c).sum()) for c in set(labels) if c != -1}
 
@@ -191,6 +220,7 @@ def main():
             "authors": list(members),
             "seed": args.seed,
             "min_cluster_size": args.min_cluster_size,
+            "max_cluster_size": args.max_cluster_size or None,
             "total": int(len(sub)),
             "kept": int(keep.sum()),
             "dropped_scatter": int((~keep).sum()),

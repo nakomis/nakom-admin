@@ -38,7 +38,25 @@
     color: #8b949e; font-size: 11px; }
   .stats b { color: #c9d1d9; font-weight: 600; font-variant-numeric: tabular-nums; }
   .sel { color: #7fb3f0; margin-top: 6px; }
+  .terms { color: #6e7681; font-size: 10px; margin-top: 3px; line-height: 1.5; }
+  .row { display: flex; justify-content: space-between; font-size: 11px;
+    color: #8b949e; margin: 2px 0 2px; }
+  .row b { color: #c9d1d9; font-variant-numeric: tabular-nums; font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: #4c8eda; margin: 0 0 6px; }
+  .note { color: #6e7681; font-size: 10px; line-height: 1.45; }
   .warn { color: #d29922; font-size: 11px; margin-top: 8px; line-height: 1.4; }
+  /* Cluster names are DOM, not WebGL. Text in a point cloud needs a font
+     atlas, per-glyph quads and a shader that fights the depth buffer; an
+     absolutely-positioned div needs a projected centroid and nothing else,
+     and it stays crisp at every zoom because it is never rasterised into a
+     texture. pointer-events stay off so labels never intercept a click meant
+     for the sphere underneath. */
+  #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  #labels div { position: absolute; transform: translate(-50%, -50%);
+    white-space: nowrap; font-size: 11px; letter-spacing: .01em;
+    color: #c9d1d9; text-shadow: 0 0 4px #0b0d11, 0 0 8px #0b0d11; }
+  #labels div.sel { color: #ffe27a; font-size: 12px; font-weight: 600; }
+
   #hint { position: fixed; bottom: 14px; left: 16px; color: #4b535e; font-size: 11px; }
   #err { position: fixed; inset: 0; display: none; place-items: center;
     padding: 40px; text-align: center; color: #f85149; }
@@ -57,25 +75,47 @@
     <label><input type="checkbox" id="f-tool"> Tools <span class="count" id="n-tool"></span></label>
   </fieldset>
 
+  <fieldset id="nn" hidden>
+    <legend>Nearest neighbours</legend>
+    <div class="row"><span>similarity ≥</span><b id="nn-floor-v">0.70</b></div>
+    <input type="range" id="nn-floor" min="0.30" max="0.95" step="0.01" value="0.70">
+    <div class="row"><span>links per message</span><b id="nn-k-v">8</b></div>
+    <input type="range" id="nn-k" min="1" max="24" step="1" value="8">
+    <div class="note" id="nn-note"></div>
+  </fieldset>
+
   <div class="stats">
     <div><b id="s-nodes">0</b> points · <b id="s-clusters">0</b> clusters</div>
     <div id="s-dropped"></div>
     <div id="s-selected" class="sel"></div>
+    <div id="s-terms" class="terms"></div>
   </div>
   <div class="warn" id="warn" hidden></div>
 </div>
 
-<div id="hint">drag to rotate · scroll to zoom · shift-drag to pan · click a point to show its cluster's links</div>
+<div id="labels"></div>
+<div id="hint">drag to rotate · scroll to zoom · shift-drag to pan · click a point for its cluster's links · alt-click for live nearest neighbours</div>
 <div id="err"></div>
 
 <script>
 "use strict";
 
-// pack.py substitutes the whole `/*__DATA__*/{}` token, value included — so
-// this file stays valid JavaScript unpacked, and valid once packed. Replacing
-// only a bare comment would leave the original literal stranded after the
-// injected object.
-const PROJECTIONS = /*__DATA__*/{};
+// pack.py substitutes the placeholder comment below *and* the empty object
+// after it, as one token — so this file stays valid JavaScript unpacked and
+// valid once packed. Replacing only the comment would leave the original
+// literal stranded after the injected object.
+//
+// The token is deliberately not written out in this comment. It was, once, and
+// str.replace substituted there too: the bundle inlined 26 MB of embeddings
+// twice and came out at 53 MB. pack.py now refuses to run unless the token
+// appears exactly once.
+const BUNDLE = /*__DATA__*/{};
+
+// Projections keyed by author combination, plus — when add_embeddings.py was
+// run with --shared-basis — one embedding table they all index into, rather
+// than a private copy each.
+const PROJECTIONS = BUNDLE.projections || BUNDLE;
+const SHARED_EMB = BUNDLE.shared_emb || null;
 
 // ---------------------------------------------------------------------------
 // Data
@@ -310,12 +350,10 @@ void main() {
   // marginal one as a hint. Drawing them all at equal weight would assert
   // that every link above the floor is equivalent, which is the thing the
   // old d3 graph got right by varying link distance.
-  // Strength is a real cosine, and the edge floor is 0.55 — so the useful
-  // range is roughly 0.55..1.0, not 0..1. Rebasing on that spread keeps the
-  // weakest surviving link faint without making it invisible, and still lets
-  // a near-duplicate pair stand out.
-  float t = clamp((vStrength - 0.55) / 0.45, 0.0, 1.0);
-  gl_FragColor = vec4(0.62, 0.74, 0.92, 0.30 + t * 0.55);
+  // Strength arrives already rebased out of the edge floor by pack.py, so it
+  // spans most of 0..1 and is used directly — rescaling again here would flatten
+  // the weaker half of the range to a single opacity.
+  gl_FragColor = vec4(0.62, 0.74, 0.92, 0.30 + vStrength * 0.55);
 }`;
 
 function compile(gl, type, src) {
@@ -373,6 +411,16 @@ const lineLoc = {
 
 /** Currently selected cluster id, or null for the whole view. */
 let selected = null;
+/**
+ * Currently focused *node* index, or null.
+ *
+ * Deliberately separate from `selected` rather than a mode flag: focusing a
+ * node still selects its cluster, because the answer to "what is this closest
+ * to" is much easier to read against the dimmed context of where it sits.
+ */
+let focus = null;
+/** Which focus the camera was last framed on, so sliders don't re-frame. */
+let framedFocus = null;
 let lineCount = 0;
 
 const cam = { theta: 0.6, phi: 1.15, dist: 3, target: [0, 0, 0] };
@@ -422,19 +470,30 @@ function load() {
   gl.bindBuffer(gl.ARRAY_BUFFER, buf.visible);
   gl.bufferData(gl.ARRAY_BUFFER, visible, gl.STATIC_DRAW);
 
+  p.visible = visible;
   current = p;
   cam.dist = p.radius * 2.4;
+  computeCentroids();
+  loadEmbeddings(p.meta);
+  focus = null;
+  document.getElementById("nn").hidden = !emb;
 
   const total = shown.martin + shown.claude + shown.tool;
   document.getElementById("s-nodes").textContent = total.toLocaleString();
   document.getElementById("s-clusters").textContent = seen.size.toLocaleString();
   const dropped = p.meta.total - p.meta.kept;
+  // The scatter count is stated rather than quietly omitted, and it is large —
+  // around half the corpus once clusters are capped in size. That is a result,
+  // not a defect: those messages genuinely sit in no dense region, and the
+  // alternative was HDBSCAN sweeping them into one 16,890-point cluster that
+  // no label described. A map that hides how much it discarded is a map that
+  // overstates how much structure it found.
   document.getElementById("s-dropped").textContent = dropped
-    ? `${dropped.toLocaleString()} unclustered points hidden`
+    ? `${dropped.toLocaleString()} in no cluster (${(dropped / p.meta.total * 100).toFixed(0)}%), not shown`
     : "";
   document.getElementById("s-dropped").title =
-    "Each author combination is projected and clustered independently, so "
-    + "per-author counts differ between views.";
+    "Points HDBSCAN assigned to no cluster. Each author combination is "
+    + "projected and clustered independently, so counts differ between views.";
   for (const a of AUTHOR_NAMES) {
     document.getElementById("n-" + a).textContent = shown[a] ? shown[a].toLocaleString() : "";
   }
@@ -447,6 +506,228 @@ function load() {
     warn.textContent = "No projection for this combination — showing the "
       + "all-messages layout, filtered. Positions reflect the full corpus.";
   }
+}
+
+/**
+ * Live nearest-neighbour search over the compressed embeddings.
+ *
+ * The precomputed edges are frozen at k=4 and a cosine floor of 0.55, and they
+ * are intra-cluster only. Both limits exist because the batch job had to
+ * choose once, for everyone, before anyone had looked at anything. With the
+ * vectors present the browser can answer the question the viewer is actually
+ * asking, at whatever threshold they want, and — the part the precomputed
+ * edges structurally cannot do — across cluster boundaries.
+ *
+ * Only *single-node* queries are offered, and that is a complexity result
+ * rather than a UI preference. One node against every other is O(n·d): 35,828
+ * nodes at 128 dimensions is 4.6M multiply-adds, well under a frame. All-pairs
+ * within a selection is O(n²·d), which is fine for a 155-point cluster and
+ * hopeless for the 16,890-point one — 36 billion operations. Offering it for
+ * small clusters only would mean a feature that silently stops working on
+ * exactly the dense regions worth investigating.
+ *
+ * Vectors are L2-normalised at pack time, so cosine is a plain dot product and
+ * the per-row norms below are only correcting for int8 rounding.
+ */
+let emb = null;
+
+/** Decoded shared table, built once and reused across projection switches. */
+let sharedTable = null;
+
+function decodeTable(data) {
+  const raw = atob(data);
+  const q = new Int8Array(raw.length);
+  // charCodeAt gives 0..255; the shift pair reinterprets it as signed, which
+  // is what the packed int8 actually means.
+  for (let i = 0; i < raw.length; i++) q[i] = (raw.charCodeAt(i) << 24) >> 24;
+  return q;
+}
+
+function rowNorms(q, dims, rows) {
+  const norm = new Float32Array(rows);
+  for (let r = 0; r < rows; r++) {
+    let s = 0;
+    for (let d = 0; d < dims; d++) { const v = q[r*dims + d]; s += v * v; }
+    norm[r] = Math.sqrt(s) || 1;
+  }
+  return norm;
+}
+
+function loadEmbeddings(meta) {
+  emb = null;
+  if (!meta || !meta.emb) return;
+
+  // Shared table: every projection indexes one decoded copy. Decoding it per
+  // switch would cost ~10 MB of allocation and a full pass each time the
+  // author checkboxes change.
+  if (meta.emb.shared) {
+    if (!SHARED_EMB) return;
+    if (!sharedTable) {
+      const q = decodeTable(SHARED_EMB.data);
+      sharedTable = { dims: SHARED_EMB.dims, q,
+                      norm: rowNorms(q, SHARED_EMB.dims, SHARED_EMB.count) };
+    }
+    const rows = meta.emb.rows;
+    const rowOf = new Int32Array(current.n);
+    for (let i = 0; i < current.n; i++) rowOf[i] = rows[i] === undefined ? -1 : rows[i];
+    emb = { dims: sharedTable.dims, q: sharedTable.q, rowOf,
+            norm: sharedTable.norm, n: SHARED_EMB.count,
+            quality: (meta.emb.fidelity || {}).quality || null };
+    return;
+  }
+
+  const { dims, data, idx } = meta.emb;
+  const q = decodeTable(data);
+
+  // rowOf maps node index -> row, or -1. Int32Array rather than a Map: it is
+  // read once per node in the inner loop of every query, and a Map lookup
+  // there is several times the cost of the dot product it guards.
+  const rowOf = new Int32Array(current.n).fill(-1);
+  for (let r = 0; r < idx.length; r++) rowOf[idx[r]] = r;
+
+  const norm = new Float32Array(idx.length);
+  for (let r = 0; r < idx.length; r++) {
+    let s = 0;
+    for (let d = 0; d < dims; d++) { const v = q[r*dims + d]; s += v * v; }
+    norm[r] = Math.sqrt(s) || 1;
+  }
+  emb = { dims, q, rowOf, norm, n: idx.length,
+          quality: meta.emb.quality || null };
+}
+
+/** Top-k neighbours of one node, as [{node, sim}], best first. */
+function neighboursOf(node, k, floor) {
+  if (!emb) return [];
+  const row = emb.rowOf[node];
+  if (row < 0) return [];
+  const { dims, q, rowOf, norm } = emb;
+  const base = row * dims, bn = norm[row];
+
+  // A bounded insertion list rather than scoring everything and sorting: k is
+  // single digits and n is tens of thousands, so a full sort would cost more
+  // than the search it follows.
+  const best = [];
+  for (let i = 0; i < current.n; i++) {
+    const r = rowOf[i];
+    if (r < 0 || r === row) continue;
+    if (!current.visible[i]) continue;      // respect the author filters
+    let dot = 0;
+    const o = r * dims;
+    for (let d = 0; d < dims; d++) dot += q[base + d] * q[o + d];
+    const sim = dot / (bn * norm[r]);
+    if (sim < floor) continue;
+    if (best.length < k) {
+      best.push({ node: i, sim });
+      if (best.length === k) best.sort((a, b) => b.sim - a.sim);
+    } else if (sim > best[k - 1].sim) {
+      best[k - 1] = { node: i, sim };
+      for (let j = k - 1; j > 0 && best[j].sim > best[j-1].sim; j--) {
+        const t = best[j]; best[j] = best[j-1]; best[j-1] = t;
+      }
+    }
+  }
+  return best.sort((a, b) => b.sim - a.sim);
+}
+
+/** Cluster centroids, computed once per projection. */
+let centroids = null;
+
+function computeCentroids() {
+  const p = current;
+  const acc = new Map();
+  for (let i = 0; i < p.n; i++) {
+    const c = p.cluster[i];
+    let a = acc.get(c);
+    if (!a) acc.set(c, a = [0, 0, 0, 0]);
+    a[0] += p.pos[i*3]; a[1] += p.pos[i*3+1]; a[2] += p.pos[i*3+2]; a[3]++;
+  }
+  centroids = new Map();
+  for (const [c, a] of acc) centroids.set(c, [a[0]/a[3], a[1]/a[3], a[2]/a[3]]);
+}
+
+/**
+ * Position the cluster-name overlay.
+ *
+ * Only the largest clusters are named, plus the selected one whatever its
+ * size. Labelling all 234 would produce a wall of overlapping text that hides
+ * the very structure the labels exist to explain — and past a couple of dozen
+ * names nobody reads them anyway.
+ *
+ * Cheap occlusion culling only: a label behind the camera is dropped, and one
+ * outside the viewport is skipped. Testing whether a name is buried inside the
+ * cloud would need a depth read back from the GPU every frame, which is a
+ * stall, for a label that the text-shadow already keeps legible.
+ */
+// A generous candidate pool, not a display count — collision rejection below
+// is what decides how many actually appear. Keeping the pool large is what
+// makes zooming in progressively reveal smaller topics as the centroids
+// separate, rather than showing the same fixed 20 names at every scale.
+const MAX_LABELS = 80;
+
+function drawLabels(mvp) {
+  const host = document.getElementById("labels");
+  const p = current;
+  if (!p || !centroids) { host.innerHTML = ""; return; }
+
+  const ranked = p.meta.clusters
+    .filter((c) => c.label && centroids.has(c.id))
+    .sort((a, b) => b.size - a.size)
+    .slice(0, MAX_LABELS);
+  if (selected !== null && !ranked.some((c) => c.id === selected)) {
+    const s = p.meta.clusters.find((c) => c.id === selected);
+    if (s && s.label && centroids.has(s.id)) ranked.push(s);
+  }
+
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const out = [];
+  // Greedy screen-space collision rejection. Clusters are already ordered
+  // largest-first, so the biggest topic wins contested space and smaller ones
+  // yield — which is the right precedence, and it means the surviving labels
+  // change as you zoom in and the centroids spread apart. Without this the
+  // dense middle of the map is an unreadable pile of overlapping text, which
+  // hides exactly the structure the labels are there to explain.
+  const placed = [];
+  // Distinct clusters can share a label: c-TF-IDF names a cluster by its most
+  // distinguishing terms, and several small clusters of shell transcripts all
+  // distinguish themselves the same way. Showing "completed, bash" three times
+  // reads as a rendering bug rather than as three genuinely separate regions,
+  // so only the largest keeps the name.
+  const named = new Set();
+  for (const c of ranked) {
+    if (named.has(c.label) && c.id !== selected) continue;
+    const [x, y, z] = centroids.get(c.id);
+    const cw = mvp[3]*x + mvp[7]*y + mvp[11]*z + mvp[15];
+    if (cw <= 0) continue;
+    const sx = ((mvp[0]*x + mvp[4]*y + mvp[8]*z  + mvp[12]) / cw * 0.5 + 0.5) * w;
+    const sy = (1 - ((mvp[1]*x + mvp[5]*y + mvp[9]*z + mvp[13]) / cw * 0.5 + 0.5)) * h;
+    if (sx < -80 || sy < -20 || sx > w + 80 || sy > h + 20) continue;
+
+    // Width estimated from character count rather than measured: measuring
+    // means inserting each candidate and reading offsetWidth, which forces a
+    // synchronous layout per label per frame. 5.9px/char is close enough for
+    // 11px system sans, and the cost of being slightly wrong is a little extra
+    // whitespace, not a collision.
+    const halfW = c.label.length * 2.95 + 6, halfH = 9;
+    const hit = placed.some((q) =>
+      Math.abs(q.x - sx) < q.halfW + halfW && Math.abs(q.y - sy) < q.halfH + halfH);
+    // The selection is always drawn: it is the thing the viewer just asked
+    // about, so it outranks any size ordering.
+    if (hit && c.id !== selected) continue;
+    placed.push({ x: sx, y: sy, halfW, halfH });
+    named.add(c.label);
+    // Not innerHTML per label — the text is c-TF-IDF output derived from
+    // message bodies, so it is corpus data and must not be parsed as markup.
+    const div = document.createElement("div");
+    if (c.id === selected) div.className = "sel";
+    div.style.left = sx + "px";
+    div.style.top = sy + "px";
+    div.textContent = c.label;
+    // Fade a label out when its cluster is not the selected one, matching the
+    // dimming the spheres already get, so the selected name stands alone.
+    div.style.opacity = (selected === null || c.id === selected) ? "0.92" : "0.28";
+    out.push(div);
+  }
+  host.replaceChildren(...out);
 }
 
 /**
@@ -464,10 +745,24 @@ function load() {
  */
 function frameCluster(cid) {
   const p = current;
+  frameNodes((i) => p.cluster[i] === cid);
+}
+
+/**
+ * Frame whichever nodes a predicate accepts.
+ *
+ * Used for a whole cluster and for one message plus its live neighbours. The
+ * latter matters more than it looks: a neighbour can be most of the map away —
+ * that is the entire point of searching across cluster boundaries — so framing
+ * the *cluster* would leave the interesting link running off screen, which is
+ * how the first version behaved.
+ */
+function frameNodes(accept) {
+  const p = current;
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   let n = 0;
   for (let i = 0; i < p.n; i++) {
-    if (p.cluster[i] !== cid) continue;
+    if (!accept(i)) continue;
     n++;
     for (let d = 0; d < 3; d++) {
       const v = p.pos[i*3+d];
@@ -511,7 +806,54 @@ function applySelection() {
   gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
 
   lineCount = 0;
-  if (selected !== null && p.ne) {
+
+  // Node mode: links computed here and now from the embeddings, at whatever
+  // threshold the sliders are set to, and free to cross cluster boundaries.
+  if (focus !== null && emb) {
+    const k = +document.getElementById("nn-k").value;
+    const floor = +document.getElementById("nn-floor").value;
+    const t0 = performance.now();
+    const hits = neighboursOf(focus, k, floor);
+    const px = [], st = [];
+    for (const h of hits) {
+      px.push(p.pos[focus*3], p.pos[focus*3+1], p.pos[focus*3+2],
+              p.pos[h.node*3], p.pos[h.node*3+1], p.pos[h.node*3+2]);
+      // Rebased onto the slider's own floor so the ramp always spans the
+      // visible range: at a floor of 0.9 every link is strong in absolute
+      // terms and a 0..1 ramp would render them all identically.
+      const s = Math.max(0, Math.min(1, (h.sim - floor) / Math.max(0.05, 1 - floor)));
+      st.push(s, s);
+      // Both endpoints of a live link are lit, so the neighbours stand out
+      // from the dimmed cloud they may be scattered across.
+      for (const n of [focus, h.node]) {
+        colors[n*3] = 1.0; colors[n*3+1] = 0.86; colors[n*3+2] = 0.42;
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf.color);
+    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+    if (px.length) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf.linePos);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(px), gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf.lineStr);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(st), gl.STATIC_DRAW);
+      lineCount = st.length;
+    }
+    // Frame the answer, not the cluster it happened to start in. Re-framing on
+    // every slider tick would fight the user mid-drag, so only on a new focus.
+    if (focus !== framedFocus) {
+      const inShot = new Set([focus, ...hits.map((h) => h.node)]);
+      frameNodes((i) => inShot.has(i));
+      framedFocus = focus;
+    }
+    const spread = new Set(hits.map((h) => p.cluster[h.node])).size;
+    document.getElementById("nn-note").textContent =
+      hits.length
+        ? `${hits.length} neighbours across ${spread} cluster${spread === 1 ? "" : "s"}`
+          + ` · ${(performance.now() - t0).toFixed(0)} ms`
+        : "no neighbours above this threshold";
+  }
+
+  if (focus === null && selected !== null && p.ne) {
     const px = [], st = [];
     for (let e = 0; e < p.ne; e++) {
       const a = p.ea[e];
@@ -537,13 +879,30 @@ function applySelection() {
     // obvious way back to the map you started from.
     cam.target = [0, 0, 0];
     cam.dist = p.radius * 2.4;
+    framedFocus = null;
     el.textContent = "";
   } else {
-    frameCluster(selected);
-    const size = p.meta.clusters.find((c) => c.id === selected);
-    el.textContent = `cluster ${selected} — ${(size ? size.size : 0).toLocaleString()}`
-      + ` points, ${(lineCount / 2).toLocaleString()} links`;
+    // In node mode the framing was already done above, around the message and
+    // its neighbours; re-framing on the cluster here would undo it.
+    if (focus === null) { frameCluster(selected); framedFocus = null; }
+    const c = p.meta.clusters.find((x) => x.id === selected);
+    const name = c && c.label ? c.label : `cluster ${selected}`;
+    el.textContent = focus !== null
+      ? `one message in “${name}” — ${(lineCount / 2).toLocaleString()} live links`
+      : `${name} — ${(c ? c.size : 0).toLocaleString()}`
+        + ` points, ${(lineCount / 2).toLocaleString()} links`;
   }
+
+  // The terms the label was derived from, shown whenever a cluster is
+  // selected. When labels come from --ollama the name is a language model's
+  // paraphrase of these, and a paraphrase can drift: "great, nah, mornin"
+  // came back as "Software Development Morning Routine", which sounds far more
+  // purposeful than a cluster of casual replies actually is. Keeping the terms
+  // on screen means the readable name never replaces the evidence for it, and
+  // a viewer can see for themselves when the two disagree.
+  const te = document.getElementById("s-terms");
+  const sc = selected === null ? null : p.meta.clusters.find((x) => x.id === selected);
+  te.textContent = sc && sc.terms ? sc.terms.join(" · ") : "";
   draw();
 }
 
@@ -570,7 +929,7 @@ function pickAt(mx, my) {
     const d = (sx - mx) * (sx - mx) + (sy - my) * (sy - my);
     if (d < bestD) { bestD = d; best = i; }
   }
-  return best >= 0 ? p.cluster[best] : null;
+  return best >= 0 ? best : null;
 }
 
 let currentMVP = null;
@@ -637,6 +996,8 @@ function draw() {
     gl.disableVertexAttribArray(lineLoc.pos);
     gl.disableVertexAttribArray(lineLoc.strength);
   }
+
+  drawLabels(mvp);
 }
 
 // ── interaction ────────────────────────────────────────────────────────────
@@ -670,8 +1031,17 @@ for (const ev of ["pointerup", "pointercancel"]) {
     // rotate would also reselect, which makes the graph feel possessed.
     if (drag && drag.moved < 5 && ev === "pointerup") {
       const r = canvas.getBoundingClientRect();
-      const hit = pickAt(e.clientX - r.left, e.clientY - r.top);
-      selected = (hit === null || hit === selected) ? null : hit;
+      const node = pickAt(e.clientX - r.left, e.clientY - r.top);
+      const hit = node === null ? null : current.cluster[node];
+      if (node !== null && (e.altKey || e.metaKey) && emb) {
+        // Alt-click asks the embedding question. Clicking the same node again
+        // releases it rather than recomputing an identical answer.
+        focus = focus === node ? null : node;
+        selected = focus === null ? selected : hit;
+      } else {
+        focus = null;
+        selected = (hit === null || hit === selected) ? null : hit;
+      }
       applySelection();
     }
     drag = null;
@@ -687,6 +1057,18 @@ window.addEventListener("resize", draw);
 
 for (const a of AUTHOR_NAMES) {
   document.getElementById("f-" + a).addEventListener("change", load);
+}
+
+// Live sliders. Recomputing on every input event is affordable precisely
+// because the query is O(n·d) — the whole point of restricting to single-node
+// search — so the map responds continuously as the threshold is dragged
+// rather than after it is released.
+for (const [id, out, fmt] of [["nn-floor", "nn-floor-v", (v) => (+v).toFixed(2)],
+                              ["nn-k", "nn-k-v", (v) => v]]) {
+  document.getElementById(id).addEventListener("input", (e) => {
+    document.getElementById(out).textContent = fmt(e.target.value);
+    if (focus !== null) applySelection();
+  });
 }
 
 const names = Object.keys(PROJECTIONS || {});
