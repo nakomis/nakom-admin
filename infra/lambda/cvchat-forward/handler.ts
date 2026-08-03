@@ -184,6 +184,28 @@ export async function buildEnvelope(
     return { v: ENVELOPE_VERSION, id: job.id, s3: { bucket: payloadBucket, key } };
 }
 
+/**
+ * The cursor value meaning "everything". The sort key is an ISO timestamp and
+ * the query is `sk > :cursor`, so any string that sorts below a date works;
+ * SSM rejects an empty value, hence "0". `scripts/cvchat-backfill.sh` rewinds
+ * to the same literal, deliberately.
+ */
+export const CURSOR_BEGINNING = '0';
+
+/**
+ * Is this the specific "no such parameter" error, and nothing else?
+ *
+ * Narrow on purpose. A missing cursor means a environment that has never run
+ * and should start from the beginning — but *any other* SSM failure must
+ * propagate. Catching broadly would turn an AccessDenied or a throttle into a
+ * silent rewind, and a silent rewind re-forwards the entire corpus: ~70,000
+ * records back through Cal's serial embedder. Failing loudly is enormously
+ * cheaper than succeeding wrongly here.
+ */
+export function isParameterNotFound(err: unknown): boolean {
+    return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'ParameterNotFound';
+}
+
 export const handler = async () => {
     const queueUrl = process.env.CVCHAT_QUEUE_URL!;
     const cursorParam = process.env.IMPORT_CURSOR_PARAM!;
@@ -211,8 +233,21 @@ export const handler = async () => {
     const encrypter = new age.Encrypter();
     encrypter.addRecipient(recipient);
 
-    const cursorResult = await ssm.send(new GetParameterCommand({ Name: cursorParam }));
-    const cursor = cursorResult.Parameter!.Value!;
+    // Nothing creates this parameter — not this stack, not any other. In prod
+    // it exists only as a leftover from the import-generate flow this replaced,
+    // so every *new* environment starts without it and, before this, failed on
+    // every invocation until someone set it by hand. Treat "absent" as "never
+    // run", start from the beginning, and let the PutParameter below write it
+    // on the first successful round.
+    let cursor: string;
+    try {
+        const cursorResult = await ssm.send(new GetParameterCommand({ Name: cursorParam }));
+        cursor = cursorResult.Parameter?.Value ?? CURSOR_BEGINNING;
+    } catch (err) {
+        if (!isParameterNotFound(err)) throw err;
+        console.log(`${cursorParam} does not exist — starting from the beginning`);
+        cursor = CURSOR_BEGINNING;
+    }
 
     // No FilterExpression. import-generate carried `attribute_exists(
     // userMessage)` with the comment "skip SMS_SENT sentinel records (they

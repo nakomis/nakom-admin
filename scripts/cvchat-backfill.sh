@@ -56,10 +56,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-PREVIOUS=$(aws ssm get-parameter --name "$CURSOR_PARAM" --region "$REGION" \
-    --query 'Parameter.Value' --output text)
+# Absent is a normal state, not an error: nothing creates this parameter, so
+# an environment that has never forwarded simply has no cursor. Only the
+# ParameterNotFound case is tolerated — any other failure (no credentials,
+# wrong account, denied) must still stop the run, because those look identical
+# from here and "start from the beginning" is the wrong answer to all of them.
+if PREVIOUS=$(aws ssm get-parameter --name "$CURSOR_PARAM" --region "$REGION" \
+        --query 'Parameter.Value' --output text 2>/tmp/cvchat-cursor-read.err); then
+    echo "cursor is currently: $PREVIOUS"
+elif grep -q 'ParameterNotFound' /tmp/cvchat-cursor-read.err; then
+    PREVIOUS=""
+    echo "cursor does not exist yet — this environment has never forwarded"
+else
+    echo "could not read $CURSOR_PARAM:" >&2
+    cat /tmp/cvchat-cursor-read.err >&2
+    rm -f /tmp/cvchat-cursor-read.err
+    exit 1
+fi
+rm -f /tmp/cvchat-cursor-read.err
 
-echo "cursor is currently: $PREVIOUS"
 echo "cursor will be set to: $FROM"
 
 if [[ $DRY_RUN -eq 1 ]]; then
@@ -68,12 +83,20 @@ if [[ $DRY_RUN -eq 1 ]]; then
 fi
 
 # Printed prominently because it is the one piece of state this script
-# destroys. If the run goes wrong, this is what puts it back.
-echo
-echo "To undo the rewind without replaying:"
-echo "  aws ssm put-parameter --name $CURSOR_PARAM --value '$PREVIOUS' \\"
-echo "      --type String --overwrite --region $REGION"
-echo
+# destroys. If the run goes wrong, this is what puts it back. Suppressed when
+# there is no previous value — SSM rejects an empty one, so printing the
+# command would offer a recovery step that cannot work.
+if [[ -n "$PREVIOUS" ]]; then
+    echo
+    echo "To undo the rewind without replaying:"
+    echo "  aws ssm put-parameter --name $CURSOR_PARAM --value '$PREVIOUS' \\"
+    echo "      --type String --overwrite --region $REGION"
+    echo
+else
+    echo
+    echo "(no previous cursor to restore — nothing is being overwritten)"
+    echo
+fi
 
 read -r -p "Rewind the cursor and start the backfill? [y/N] " reply
 [[ "$reply" == "y" || "$reply" == "Y" ]] || { echo "aborted"; exit 1; }
@@ -86,6 +109,9 @@ round=0
 while :; do
     round=$((round + 1))
     out=$(mktemp)
+    # `set -e` exits straight out of the loop if the invoke below fails, past
+    # every explicit `rm` — so the cleanup has to be on EXIT, not inline.
+    trap 'rm -f "$out"' EXIT
     # Synchronous invoke: the point is to read `forwarded` and decide whether
     # to go again. An async invoke would return immediately and this loop
     # would spin, re-invoking a function that is already running — and two

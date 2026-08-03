@@ -1,4 +1,4 @@
-import { toJob, num, str, recordedAtFromSk, buildEnvelope } from './handler';
+import { toJob, num, str, recordedAtFromSk, buildEnvelope, isParameterNotFound } from './handler';
 
 /**
  * A DynamoDB item in the shape nakom.is/lambda/chat/chat-logger.ts actually
@@ -201,5 +201,34 @@ describe('buildEnvelope', () => {
         expect(stored).toBe(
             Buffer.from(await encrypter.encrypt(new TextEncoder().encode(JSON.stringify(job)))).toString('latin1'),
         );
+    });
+});
+
+describe('isParameterNotFound', () => {
+    /**
+     * The case that makes a new environment work at all: nothing creates the
+     * cursor parameter, so the first invocation anywhere finds it missing.
+     */
+    it('recognises the SDK error for a parameter that does not exist', () => {
+        const err = Object.assign(new Error('Parameter /x not found.'), { name: 'ParameterNotFound' });
+        expect(isParameterNotFound(err)).toBe(true);
+    });
+
+    /**
+     * The case that matters far more. Treating any SSM failure as "missing"
+     * would rewind the cursor to the beginning and re-forward the whole
+     * corpus -- ~70,000 records through a serial embedder -- while reporting
+     * success. These must propagate.
+     */
+    it('does not mistake other SSM failures for a missing parameter', () => {
+        for (const name of ['AccessDeniedException', 'ThrottlingException', 'InternalServerError']) {
+            expect(isParameterNotFound(Object.assign(new Error('nope'), { name }))).toBe(false);
+        }
+    });
+
+    it('tolerates junk without throwing', () => {
+        expect(isParameterNotFound(undefined)).toBe(false);
+        expect(isParameterNotFound(null)).toBe(false);
+        expect(isParameterNotFound('ParameterNotFound')).toBe(false);
     });
 });

@@ -20,3 +20,6 @@ __pycache__/
 # draw.io desktop autosave backups (.$<name>.drawio.bkp), written beside the
 # file every time a diagram is opened.
 .$*.bkp
+
+# VS Code multi-root workspace files are per-developer, not repo content.
+*.code-workspace
