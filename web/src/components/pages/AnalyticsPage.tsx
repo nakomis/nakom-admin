@@ -1,25 +1,40 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+/**
+ * The Analytics tab, after Aurora (ADMIN-8/9/10).
+ *
+ * What changed and why:
+ *
+ *   * **The Aurora Database section is gone.** Start/stop/snapshot/restore
+ *     existed because the console's data lived in a cluster that cost money to
+ *     leave running, so someone had to turn it on before reading anything and
+ *     remember to turn it off. The data now lives on Luke, which is on anyway.
+ *     Nothing here starts or stops.
+ *   * **Tool usage and IP activity come from Cal**, not from `/query/{type}`
+ *     against Aurora. Same shapes, same panels — see cvChatService.
+ *   * **The 2D similarity graph and the UMAP embedding view are gone**, both
+ *     replaced by the 3D graph on its own tab. They existed as two views of
+ *     the same relationships, and the 3D one is the same relationships again.
+ *     Keeping all three would mean three things to keep in step.
+ *
+ * What stayed on AWS, deliberately: the CloudFront log miner (CloudWatch
+ * Logs) and the IP blocklist (DynamoDB). Neither ever touched Aurora, and
+ * neither has anything to do with the home estate.
+ */
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
-import Slider from '@mui/material/Slider';
 import Typography from '@mui/material/Typography';
 import { AnalyticsService } from '../../services/analyticsService';
-import EmbeddingVisualizer from '../EmbeddingVisualizer';
-import SimilarityGraph from '../SimilarityGraph';
+import { CvChatService, type CvChatStats } from '../../services/cvChatService';
 import ToolUsageChart from '../ToolUsageChart';
 import IpActivityTable from '../IpActivityTable';
 import LogMiner from '../LogMiner';
 import BlocklistPanel from '../BlocklistPanel';
 import { Credentials } from '@aws-sdk/client-cognito-identity';
 
-function StatusChip({ status }: { status: string }) {
-    const color = status === 'available' ? 'success'
-        : status === 'stopped' || status === 'paused' ? 'default'
-        : 'warning';
-    return <Chip label={status} color={color as any} size="small" />;
-}
+/** Where Cal is reached, matching CvChatGraphPage. */
+const CAL_API = 'https://api.cal.home.nakomis.com';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
@@ -37,249 +52,126 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     );
 }
 
-export default function AnalyticsPage({ creds }: { creds: Credentials }) {
+export default function AnalyticsPage({ creds, token }: { creds: Credentials; token: string }) {
     const service = useMemo(() => new AnalyticsService(creds), [creds]);
-    const [rdsStatus, setRdsStatus] = useState<string>('unknown');
-    const [rdsEndpoint, setRdsEndpoint] = useState<string | undefined>();
-    const [statusLoading, setStatusLoading] = useState(false);
-    const [actionLoading, setActionLoading] = useState(false);
-    const [importResult, setImportResult] = useState<string | null>(null);
-    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const cal = useMemo(() => new CvChatService(CAL_API, token), [token]);
 
-    // Similarity graph
-    const [nodes, setNodes] = useState<any[]>([]);
-    const [edges, setEdges] = useState<any[]>([]);
-    const [threshold, setThreshold] = useState(0.85);
-    const [graphLoading, setGraphLoading] = useState(false);
-    const [graphError, setGraphError] = useState<string | null>(null);
+    const [stats, setStats] = useState<CvChatStats | null>(null);
+    const [calError, setCalError] = useState<string | null>(null);
+    const [calLoading, setCalLoading] = useState(false);
 
-    // Tool usage & IP activity
-    const [toolRows, setToolRows] = useState<any[]>([]);
-    const [ipRows, setIpRows] = useState<any[]>([]);
-    const [analyticsError, setAnalyticsError] = useState<string | null>(null);
-
-    // Blocklist
     const [blocklist, setBlocklist] = useState<any[]>([]);
+    const [importResult, setImportResult] = useState<string | null>(null);
+    const [importing, setImporting] = useState(false);
 
-    const fetchStatus = useCallback(async () => {
-        setStatusLoading(true);
+    const loadCal = useCallback(async () => {
+        setCalLoading(true);
+        setCalError(null);
         try {
-            const r = await service.getRdsStatus();
-            setRdsStatus(r.status);
-            setRdsEndpoint(r.endpoint);
-        } catch {
-            setRdsStatus('error');
+            setStats(await cal.stats());
+        } catch (e) {
+            setCalError(e instanceof Error ? e.message : String(e));
+            setStats(null);
         } finally {
-            setStatusLoading(false);
+            setCalLoading(false);
         }
-    }, [service]);
+    }, [cal]);
 
-    useEffect(() => { fetchStatus(); }, [fetchStatus]);
-
-    // Poll while transitioning
-    useEffect(() => {
-        if (rdsStatus === 'starting' || rdsStatus === 'stopping' || rdsStatus === 'pausing' || rdsStatus === 'resuming') {
-            if (!pollRef.current) {
-                pollRef.current = setInterval(fetchStatus, 5000);
-            }
-        } else {
-            if (pollRef.current) {
-                clearInterval(pollRef.current);
-                pollRef.current = null;
-            }
-        }
-        return () => {
-            if (pollRef.current) clearInterval(pollRef.current);
-        };
-    }, [rdsStatus, fetchStatus]);
-
-    const rdsAction = async (action: () => Promise<any>) => {
-        setActionLoading(true);
-        try {
-            await action();
-            await fetchStatus();
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
-    const importNow = async () => {
-        setActionLoading(true);
-        try {
-            const r = await service.importGenerate();
-            setImportResult(`Queued ${r.queued} records`);
-        } catch (e: any) {
-            setImportResult(`Error: ${e.message}`);
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
-    const loadGraph = useCallback(async (t: number) => {
-        setGraphLoading(true);
-        setGraphError(null);
-        try {
-            const [n, e] = await Promise.all([
-                service.query('nodes'),
-                service.query('similarity_graph', { threshold: t }),
-            ]);
-            setNodes(n ?? []);
-            setEdges(e ?? []);
-        } catch (e: any) {
-            setGraphError(e?.message ?? 'Failed to load analytics');
-        } finally {
-            setGraphLoading(false);
-        }
-    }, [service]);
-
-    const loadAnalytics = useCallback(async () => {
-        setAnalyticsError(null);
-        try {
-            const [tools, ips, bl] = await Promise.all([
-                service.query('tool_usage'),
-                service.query('ip_activity'),
-                service.getBlocklist(),
-            ]);
-            setToolRows(tools ?? []);
-            setIpRows(ips ?? []);
-            setBlocklist(bl ?? []);
-        } catch (e: any) {
-            setAnalyticsError(e?.message ?? 'Failed to load analytics');
-        }
-    }, [service]);
+    useEffect(() => { void loadCal(); }, [loadCal]);
 
     const refreshBlocklist = useCallback(async () => {
         try {
-            const bl = await service.getBlocklist();
-            setBlocklist(bl ?? []);
+            setBlocklist(await service.getBlocklist() ?? []);
         } catch {
-            // silently fail — will retry once credentials are ready
+            // Silent: this runs on mount and the SigV4 credentials may not be
+            // ready yet. The panel has its own refresh button.
         }
     }, [service]);
 
-    // Load blocklist on mount (independent of RDS)
-    useEffect(() => { refreshBlocklist(); }, [refreshBlocklist]);
+    useEffect(() => { void refreshBlocklist(); }, [refreshBlocklist]);
 
     const handleBlock = async (ip: string, reason: string) => {
         await service.addToBlocklist(ip, reason);
         await refreshBlocklist();
     };
 
+    /**
+     * Kicks the forwarder. It now enqueues onto SQS for Cal rather than
+     * embedding with Bedrock and writing to Aurora, so "done" means *queued* —
+     * the rows appear once Cal has embedded them, which is not instant.
+     */
+    const importNow = async () => {
+        setImporting(true);
+        try {
+            const r = await service.importGenerate();
+            setImportResult(
+                r.queued === 0
+                    ? 'Nothing new to forward.'
+                    : `Queued ${r.queued} record(s) for Cal. They appear here once embedded.`,
+            );
+        } catch (e: any) {
+            setImportResult(`Error: ${e.message}`);
+        } finally {
+            setImporting(false);
+        }
+    };
+
     return (
         <Box sx={{ p: 3, maxWidth: 1200 }}>
+            {calError && (
+                <Alert
+                    severity="error"
+                    sx={{ mb: 3 }}
+                    action={<Button color="inherit" size="small" onClick={() => void loadCal()}>Retry</Button>}
+                >
+                    {calError}
+                </Alert>
+            )}
 
-            {/* Aurora Database */}
-            <Section title="Aurora Database">
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <Typography>Status:</Typography>
-                                <Box sx={{ opacity: statusLoading ? 0.4 : 1, transition: 'opacity 0.2s' }}>
-                                    <StatusChip status={rdsStatus} />
-                                </Box>
-                                {rdsEndpoint && (
-                                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                                        {rdsEndpoint.split('.')[0]}
-                                    </Typography>
-                                )}
-                            </Box>
-                            <Button variant="outlined" size="small" onClick={fetchStatus} disabled={statusLoading}>
-                                Refresh
-                            </Button>
-                        </Box>
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
-                            <Button
-                                variant="outlined"
-                                disabled={actionLoading || rdsStatus !== 'available'}
-                                onClick={() => rdsAction(() => service.takeSnapshot())}
-                            >
-                                ● Backup
-                            </Button>
-                            <Button
-                                variant="outlined"
-                                color="warning"
-                                disabled={actionLoading}
-                                onClick={() => rdsAction(() => service.restoreSnapshot())}
-                            >
-                                ⟳ Restore snapshot
-                            </Button>
-                            <Button
-                                variant="contained"
-                                color="secondary"
-                                disabled={actionLoading || rdsStatus !== 'available'}
-                                onClick={importNow}
-                            >
-                                ↓ Import now
-                            </Button>
-                            {actionLoading && <CircularProgress size={20} />}
-                        </Box>
-                        {importResult && (
-                            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                                {importResult}
-                            </Typography>
-                        )}
-            </Section>
-
-            {/* Analytics — only visible when RDS is up */}
-            <Section title="Analytics">
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                    <Button variant="outlined" onClick={() => { loadGraph(threshold); loadAnalytics(); }}>
-                        Load analytics
+            <Section title="Ingest">
+                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Button variant="contained" color="secondary" disabled={importing} onClick={importNow}>
+                        ↓ Forward new records
                     </Button>
-                    {graphLoading && <CircularProgress size={20} />}
-                    {graphError && (
-                        <Typography color="error" variant="caption">{graphError}</Typography>
-                    )}
-                    {analyticsError && (
-                        <Typography color="error" variant="caption">{analyticsError}</Typography>
-                    )}
+                    {importing && <CircularProgress size={20} />}
+                    <Button variant="outlined" size="small" disabled={calLoading} onClick={() => void loadCal()}>
+                        Refresh
+                    </Button>
+                    {calLoading && <CircularProgress size={18} />}
                 </Box>
+                {importResult && (
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                        {importResult}
+                    </Typography>
+                )}
+                {stats && (
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                        {stats.total_records.toLocaleString()} record(s) stored,{' '}
+                        {stats.embedded_records.toLocaleString()} embedded,{' '}
+                        {stats.edges.toLocaleString()} similarity edge(s).
+                    </Typography>
+                )}
             </Section>
 
-            {/* Similarity graph */}
-            {nodes.length > 0 && (
-                <Section title="Semantic similarity graph">
-                    <Box sx={{ mb: 2, maxWidth: 400 }}>
-                        <Typography gutterBottom>Similarity threshold: {threshold}</Typography>
-                        <Slider
-                            min={0.7} max={0.99} step={0.01}
-                            value={threshold}
-                            onChange={(_, v) => setThreshold(v as number)}
-                            onChangeCommitted={(_, v) => loadGraph(v as number)}
-                        />
-                    </Box>
-                    <SimilarityGraph nodes={nodes} edges={edges} />
-                </Section>
-            )}
-
-            {/* Embedding visualisation — always available once analytics are loaded */}
-            {(nodes.length > 0 || toolRows.length > 0) && (
-                <Section title="Embedding space (3D UMAP)">
-                    <EmbeddingVisualizer service={service} />
-                </Section>
-            )}
-
-            {/* Tool usage */}
-            {toolRows.length > 0 && (
+            {stats && stats.tools.length > 0 && (
                 <Section title="Tool usage">
-                    <ToolUsageChart rows={toolRows} />
+                    <ToolUsageChart rows={stats.tools} />
                 </Section>
             )}
 
-            {/* IP activity */}
-            {ipRows.length > 0 && (
+            {stats && stats.ips.length > 0 && (
                 <Section title="IP activity">
-                    <IpActivityTable rows={ipRows} onBlock={ip => handleBlock(ip, 'manual block')} />
+                    <IpActivityTable
+                        rows={stats.ips}
+                        onBlock={(ip) => handleBlock(ip, 'manual block')}
+                    />
                 </Section>
             )}
 
-
-            {/* Log miner */}
             <Section title="CloudFront log miner">
                 <LogMiner service={service} onBlock={handleBlock} />
             </Section>
 
-
-            {/* Blocklist */}
             <Section title="IP blocklist">
                 <BlocklistPanel service={service} entries={blocklist} onRefresh={refreshBlocklist} />
             </Section>
