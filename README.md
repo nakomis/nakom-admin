@@ -27,11 +27,11 @@ CertificateStack (us-east-1) → CognitoStack → CloudfrontStack → AnalyticsS
 
 ```bash
 # Infra
-cd infra && npm install
+cd infra && pnpm install
 AWS_PROFILE=nakom.is-admin cdk synth
 
 # Web app
-cd web && npm install && npm start
+cd web && pnpm install && pnpm start
 ```
 
 ## Git hooks

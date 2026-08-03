@@ -1,0 +1,7 @@
+# esbuild's postinstall links the platform binary that `vite build` runs. pnpm
+# blocks dependency build scripts by default (supply-chain hardening), and a
+# blocked one here is a hard error, not a warning — so it has to be named.
+# This lives here rather than in package.json: pnpm 11 no longer reads the
+# "pnpm" field there, and warns if you try.
+allowBuilds:
+  esbuild: true

@@ -8,7 +8,7 @@ DIST_ID=$(aws cloudformation describe-stacks --stack-name AdminCloudfrontStack \
     --output text --profile "$PROFILE" --region "$REGION")
 
 bash "$(dirname "$0")/set-config.sh"
-npm run build
+pnpm run build
 aws s3 sync dist/ "s3://$BUCKET/" --delete --profile "$PROFILE" --region "$REGION"
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" \
     --profile "$PROFILE" --region "$REGION"
