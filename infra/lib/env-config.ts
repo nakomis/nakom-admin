@@ -7,7 +7,6 @@ export interface EnvConfig {
     apiDomainName: string;      // api.admin.nakomis.com | api.admin.sandbox.nakomis.com
     zoneName: string;           // nakomis.com | sandbox.nakomis.com
     webBucketName: string;      // nakomis-admin-web | nakomis-admin-sandbox-web
-    stagingBucketName: string;  // nakomis-analytics-staging | nakomis-analytics-staging-sandbox
 }
 
 const CONFIGS: Record<DeployEnv, Omit<EnvConfig, 'deployEnv'>> = {
@@ -17,7 +16,6 @@ const CONFIGS: Record<DeployEnv, Omit<EnvConfig, 'deployEnv'>> = {
         apiDomainName:      'api.admin.nakomis.com',
         zoneName:           'nakomis.com',
         webBucketName:      'nakomis-admin-web',
-        stagingBucketName:  'nakomis-analytics-staging',
     },
     sandbox: {
         account:            '975050268859',
@@ -25,7 +23,6 @@ const CONFIGS: Record<DeployEnv, Omit<EnvConfig, 'deployEnv'>> = {
         apiDomainName:      'api.admin.sandbox.nakomis.com',
         zoneName:           'sandbox.nakomis.com',
         webBucketName:      'nakomis-admin-sandbox-web',
-        stagingBucketName:  'nakomis-analytics-staging-sandbox',
     },
 };
 
