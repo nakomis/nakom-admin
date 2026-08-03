@@ -16,3 +16,7 @@ config.json
 PLAN.md
 infra/*.out
 __pycache__/
+
+# draw.io desktop autosave backups (.$<name>.drawio.bkp), written beside the
+# file every time a diagram is opened.
+.$*.bkp
