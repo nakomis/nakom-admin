@@ -14,7 +14,8 @@ import AnalyticsPage from './components/pages/AnalyticsPage';
 import CvChatGraphPage from './components/pages/CvChatGraphPage';
 import { CognitoIdentityClient, Credentials, GetCredentialsForIdentityCommand, GetIdCommand } from '@aws-sdk/client-cognito-identity';
 
-const App: React.FC = () => {
+/** onSignOut is set when mounted in nakomis-shell, which owns the session. */
+const App: React.FC<{ onSignOut?: () => void }> = ({ onSignOut }) => {
     const auth = useAuth();
     const [creds, setCreds] = React.useState<Credentials | null>(null);
     const [tabId, setTabId] = React.useState(0);
@@ -110,7 +111,11 @@ const App: React.FC = () => {
                         <Button
                             color="inherit"
                             sx={{ mr: 1 }}
-                            onClick={() => { auth.removeUser(); signOutRedirect(); }}
+                            onClick={() => {
+                                if (onSignOut) return onSignOut();
+                                auth.removeUser();
+                                signOutRedirect();
+                            }}
                         >
                             Sign out
                         </Button>

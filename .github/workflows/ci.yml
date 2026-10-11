@@ -293,10 +293,47 @@ jobs:
           aws cloudfront create-invalidation --distribution-id $DIST_ID --paths '/*'
 
   # ── CI Status gate (always runs, allows skipped jobs) ─────────────────────────
+  # ── Remote for nakomis-shell (app.{zone}/admin) ──────────────────────────────
+  deploy-remote-sandbox:
+    permissions:
+      id-token: write
+      contents: read
+    needs: [deploy-web-sandbox]
+    if: always() && needs.deploy-web-sandbox.result == 'success'
+    uses: nakomis/nakomis-workflows/.github/workflows/deploy-static.yml@main
+    with:
+      environment: sandbox
+      aws-role-arn: arn:aws:iam::975050268859:role/nakomis-nakom-admin-github-ci-sandbox
+      working-directory: web
+      build-command: bash scripts/set-config.sh && pnpm build:remote
+      dist-dir: dist-remote
+      ssm-bucket-param: /nakomis-shell/sandbox/bucket-name
+      ssm-distribution-param: /nakomis-shell/sandbox/distribution-id
+      prefix: remotes/admin
+      invalidation-paths: /remotes/admin/*
+
+  deploy-remote-prod:
+    permissions:
+      id-token: write
+      contents: read
+    needs: [deploy-web-prod]
+    if: always() && needs.deploy-web-prod.result == 'success'
+    uses: nakomis/nakomis-workflows/.github/workflows/deploy-static.yml@main
+    with:
+      environment: production
+      aws-role-arn: arn:aws:iam::637423226886:role/nakomis-nakom-admin-github-ci-prod
+      working-directory: web
+      build-command: bash scripts/set-config.sh && pnpm build:remote
+      dist-dir: dist-remote
+      ssm-bucket-param: /nakomis-shell/prod/bucket-name
+      ssm-distribution-param: /nakomis-shell/prod/distribution-id
+      prefix: remotes/admin
+      invalidation-paths: /remotes/admin/*
+
   ci-status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [infra, synth-infra-sandbox, web, deploy-infra-sandbox, deploy-web-sandbox, deploy-infra-prod, deploy-web-prod]
+    needs: [infra, synth-infra-sandbox, web, deploy-infra-sandbox, deploy-web-sandbox, deploy-infra-prod, deploy-web-prod, deploy-remote-sandbox, deploy-remote-prod]
     if: always()
     steps:
       - name: Check CI results
@@ -307,7 +344,9 @@ jobs:
              [[ "${{ needs.deploy-infra-sandbox.result }}" == "failure" ]] || \
              [[ "${{ needs.deploy-web-sandbox.result }}" == "failure" ]] || \
              [[ "${{ needs.deploy-infra-prod.result }}" == "failure" ]] || \
-             [[ "${{ needs.deploy-web-prod.result }}" == "failure" ]]; then
+             [[ "${{ needs.deploy-web-prod.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-remote-sandbox.result }}" == "failure" ]] || \
+             [[ "${{ needs.deploy-remote-prod.result }}" == "failure" ]]; then
             echo "❌ CI checks failed"
             exit 1
           fi

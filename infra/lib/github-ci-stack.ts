@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { DeployEnv, getEnvConfig } from './env-config';
 
@@ -27,7 +28,11 @@ export class GithubCiStack extends cdk.Stack {
                     'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
                 },
                 StringLike: {
-                    'token.actions.githubusercontent.com:sub': 'repo:nakomis/nakom-admin:*',
+                    // GitHub now presents repo:owner@id/repo@id:…; accept both forms.
+                    'token.actions.githubusercontent.com:sub': [
+                        'repo:nakomis@1488244/nakom-admin@1167848809:*',
+                        'repo:nakomis/nakom-admin:*',
+                    ],
                 },
             }),
         });
@@ -61,6 +66,12 @@ export class GithubCiStack extends cdk.Stack {
             actions: ['ssm:GetParameter'],
             resources: [`arn:aws:ssm:${this.region}:${config.account}:parameter/nakom-admin/*`],
         }));
+
+        // Remote deploy: publish the Module Federation build into nakomis-shell's bucket (remotes/admin/).
+        ciRole.addManagedPolicy(iam.ManagedPolicy.fromManagedPolicyArn(
+            this, 'ShellRemoteDeployer',
+            ssm.StringParameter.valueForStringParameter(this, `/nakomis-shell/${deployEnv}/remote-deployer-policy-arn`),
+        ));
 
         new cdk.CfnOutput(this, 'CiRoleArn', { value: ciRole.roleArn });
     }

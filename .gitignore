@@ -23,3 +23,4 @@ __pycache__/
 
 # VS Code multi-root workspace files are per-developer, not repo content.
 *.code-workspace
+web/dist-remote

@@ -49,10 +49,17 @@ export class CognitoStack extends cdk.Stack {
         this.identityPool = new cognito.CfnIdentityPool(this, 'AdminIdentityPool', {
             identityPoolName: `nakom_admin_${deployEnv}`,
             allowUnauthenticatedIdentities: false,
-            cognitoIdentityProviders: [{
-                clientId: this.userPoolClient.userPoolClientId,
-                providerName: `cognito-idp.${this.region}.amazonaws.com/${userPoolId}`,
-            }],
+            cognitoIdentityProviders: [
+                {
+                    clientId: this.userPoolClient.userPoolClientId,
+                    providerName: `cognito-idp.${this.region}.amazonaws.com/${userPoolId}`,
+                },
+                // Admin also runs inside nakomis-shell (app.{zone}/admin), signed in with the shell's client.
+                {
+                    clientId: ssm.StringParameter.valueForStringParameter(this, `/nakomis-shell/${deployEnv}/cognito/client-id`),
+                    providerName: `cognito-idp.${this.region}.amazonaws.com/${userPoolId}`,
+                },
+            ],
         });
 
         this.authenticatedRole = new iam.Role(this, 'AuthenticatedRole', {
