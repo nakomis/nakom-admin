@@ -12,6 +12,18 @@ on:
 env:
   CHECKOUT_REF: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
 
+# HOME-344: one run at a time per ref. Without this, two merges to main in quick
+# succession run side by side and can deploy out of order (the older commit
+# finishing last and winning) while both show green. On main (push and
+# workflow_dispatch share refs/heads/main) a new run queues behind the one in
+# progress rather than cancelling it, so a deploy is never cut off halfway.
+# On a PR a new push cancels the now-stale run, as nothing deploys from a PR.
+# NB GitHub holds at most one pending run per group: a third merge supersedes
+# (cancels) the queued second one before it starts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ── Path-change detection ─────────────────────────────────────────────────────
   changes:
