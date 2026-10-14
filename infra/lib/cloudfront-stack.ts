@@ -58,16 +58,18 @@ export class CloudfrontStack extends cdk.Stack {
         });
         this.webBucket = s3.Bucket.fromBucketName(this, 'WebBucket', bucketName);
 
-        // Rewrite SPA routes (no file extension) to /index.html at the viewer,
-        // so S3 never returns a 403 for missing routes and API error responses are unaffected.
-        const spaRoutingFn = new cloudfront.Function(this, 'SpaRoutingFn', {
+        // The console now lives in nakomis-shell (FLEET-3): send every page here to the same path under the shell's
+        // /admin. /api/* below is left alone so nothing still calling it breaks.
+        const redirectToShellFn = new cloudfront.Function(this, 'RedirectToShellFn', {
             code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
-    var uri = event.request.uri;
-    if (!uri.includes('.')) {
-        event.request.uri = '/index.html';
-    }
-    return event.request;
+    // Path only: the old console's query strings (OAuth callbacks) mean nothing to the shell.
+    var path = event.request.uri === '/' ? '' : event.request.uri;
+    return {
+        statusCode: 301,
+        statusDescription: 'Moved Permanently',
+        headers: { location: { value: '${config.shellAdminUrl}' + path } },
+    };
 }
 `),
             runtime: cloudfront.FunctionRuntime.JS_2_0,
@@ -116,7 +118,7 @@ function handler(event) {
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
                 functionAssociations: [{
-                    function: spaRoutingFn,
+                    function: redirectToShellFn,
                     eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
                 }],
             },
