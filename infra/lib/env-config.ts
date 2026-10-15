@@ -7,6 +7,7 @@ export interface EnvConfig {
     apiDomainName: string;      // api.admin.nakomis.com | api.admin.sandbox.nakomis.com
     zoneName: string;           // nakomis.com | sandbox.nakomis.com
     webBucketName: string;      // nakomis-admin-web | nakomis-admin-sandbox-web
+    shellAdminUrl: string;      // where the console lives now: Admin inside nakomis-shell
 }
 
 const CONFIGS: Record<DeployEnv, Omit<EnvConfig, 'deployEnv'>> = {
@@ -16,6 +17,7 @@ const CONFIGS: Record<DeployEnv, Omit<EnvConfig, 'deployEnv'>> = {
         apiDomainName:      'api.admin.nakomis.com',
         zoneName:           'nakomis.com',
         webBucketName:      'nakomis-admin-web',
+        shellAdminUrl:      'https://app.nakomis.com/admin',
     },
     sandbox: {
         account:            '975050268859',
@@ -23,6 +25,7 @@ const CONFIGS: Record<DeployEnv, Omit<EnvConfig, 'deployEnv'>> = {
         apiDomainName:      'api.admin.sandbox.nakomis.com',
         zoneName:           'sandbox.nakomis.com',
         webBucketName:      'nakomis-admin-sandbox-web',
+        shellAdminUrl:      'https://app.sandbox.nakomis.com/admin',
     },
 };
 
